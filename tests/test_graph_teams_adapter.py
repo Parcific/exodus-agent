@@ -195,6 +195,25 @@ class TestBuildGraphUrl(unittest.TestCase):
             _build_graph_url("team_channel", {"team_id": "t", "channel_id": ""}, "msg-1")
         self.assertIn("channel_id", str(ctx.exception))
 
+    def test_real_teams_chat_id_with_colon_and_at(self) -> None:
+        # Realistic Teams thread ID: "19:abc123@thread.v2" — colon and @ must be preserved.
+        url = _build_graph_url("group_chat", {"chat_id": "19:abc123@thread.v2"}, "msg-1")
+        self.assertIn("19:abc123@thread.v2", url)
+        self.assertTrue(url.startswith("https://graph.microsoft.com/v1.0/chats/"))
+
+    def test_chat_id_with_slash_is_url_encoded(self) -> None:
+        # A slash in a chat_id would split the path — must be encoded.
+        url = _build_graph_url("group_chat", {"chat_id": "chat/evil"}, "msg-1")
+        self.assertNotIn("chat/evil", url)
+        self.assertIn("%2F", url)
+
+    def test_real_team_channel_guids_unchanged(self) -> None:
+        team_id = "00000000-1111-2222-3333-444444444444"
+        channel_id = "19:abc@thread.skype"
+        url = _build_graph_url("team_channel", {"team_id": team_id, "channel_id": channel_id}, "msg-1")
+        self.assertIn(team_id, url)
+        self.assertIn(channel_id, url)
+
 
 # ---------------------------------------------------------------------------
 # _build_message_body tests

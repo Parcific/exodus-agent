@@ -79,10 +79,14 @@ class _TokenCache:
         )
         try:
             with urllib.request.urlopen(req) as resp:  # noqa: S310
-                return resp.status, json.loads(resp.read())
+                try:
+                    body: dict[str, Any] = json.loads(resp.read())
+                except (json.JSONDecodeError, ValueError):
+                    body = {}
+                return resp.status, body
         except HTTPError as exc:
             try:
-                body: dict[str, Any] = json.loads(exc.read())
+                body = json.loads(exc.read())
             except Exception:
                 body = {}
             return exc.code, body
@@ -201,6 +205,12 @@ class GraphTeamsAdapter:
             return exc.code, resp_body
 
 
+# Characters legal in URL path segments per RFC 3986 and common in Graph API IDs
+# (Teams chat IDs contain ':' and '@'; GUIDs contain '-').
+# '/' '?' '#' and space are NOT in this set — they would break the URL structure.
+_URL_PATH_SAFE = ":@-._~!$&'()*+,;="
+
+
 def _build_graph_url(
     target_kind: object, target: dict[str, object], source_message_id: str
 ) -> str:
@@ -208,7 +218,8 @@ def _build_graph_url(
         chat_id = target.get("chat_id")
         if not isinstance(chat_id, str) or not chat_id.strip():
             raise ValueError(f"Message {source_message_id} missing target.chat_id")
-        return f"https://graph.microsoft.com/v1.0/chats/{chat_id.strip()}/messages"
+        safe_chat_id = urllib.parse.quote(chat_id.strip(), safe=_URL_PATH_SAFE)
+        return f"https://graph.microsoft.com/v1.0/chats/{safe_chat_id}/messages"
     if target_kind == "team_channel":
         team_id = target.get("team_id")
         channel_id = target.get("channel_id")
@@ -216,9 +227,11 @@ def _build_graph_url(
             raise ValueError(f"Message {source_message_id} missing target.team_id")
         if not isinstance(channel_id, str) or not channel_id.strip():
             raise ValueError(f"Message {source_message_id} missing target.channel_id")
+        safe_team_id = urllib.parse.quote(team_id.strip(), safe=_URL_PATH_SAFE)
+        safe_channel_id = urllib.parse.quote(channel_id.strip(), safe=_URL_PATH_SAFE)
         return (
             f"https://graph.microsoft.com/v1.0"
-            f"/teams/{team_id.strip()}/channels/{channel_id.strip()}/messages"
+            f"/teams/{safe_team_id}/channels/{safe_channel_id}/messages"
         )
     raise ValueError(
         f"Message {source_message_id} has unsupported target_kind: {target_kind!r}"
@@ -237,7 +250,9 @@ def _build_message_body(message: Mapping[str, object]) -> dict[str, Any]:
         )
     else:
         header = "<p><em>Migrated from Webex</em></p>"
-    body_html = f"{header}<p>{content}</p>" if content else header
+    # content is already an HTML snippet from Webex — concatenate directly, do NOT
+    # wrap in another <p> which would produce malformed double-nested paragraphs.
+    body_html = f"{header}{content}" if content else header
     return {"body": {"contentType": "html", "content": body_html}}
 
 
