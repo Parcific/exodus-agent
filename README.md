@@ -45,36 +45,44 @@ examples/
   webex-to-teams.example.toml
 ```
 
+## Quickstart
+
+For a step-by-step Webex → Teams migration test see
+[docs/quickstart-webex-to-teams.md](docs/quickstart-webex-to-teams.md).
+
 ## Early CLI
 
+After `pip install -e .` the `exodus` binary is on your PATH.
+`python -m exodus_agent` also works without installing.
+
 ```bash
-python -m exodus_agent --help
-python -m exodus_agent plan --config examples/webex-to-telegram.example.toml
-python -m exodus_agent doctor --config examples/webex-to-telegram.example.toml
-WEBEX_ACCESS_TOKEN=... python -m exodus_agent export-dry-run \
+exodus --help
+exodus plan --config examples/webex-to-telegram.example.toml
+exodus doctor --config examples/webex-to-telegram.example.toml
+WEBEX_ACCESS_TOKEN=... exodus export-dry-run \
   --config examples/webex-to-telegram.example.toml \
   --job-id pilot
-python -m exodus_agent telegram-destination-map-template \
+exodus telegram-destination-map-template \
   --config examples/webex-to-telegram.example.toml
-python -m exodus_agent telegram-package \
+exodus telegram-package \
   --config examples/webex-to-telegram.example.toml
-python -m exodus_agent telegram-verify \
+exodus telegram-verify \
   --config examples/webex-to-telegram.example.toml
-python -m exodus_agent telegram-import-plan \
+exodus telegram-import-plan \
   --config examples/webex-to-telegram.example.toml \
   --destination-map destination-map.json
-python -m exodus_agent telegram-execute-plan \
+exodus telegram-execute-plan \
   --config examples/webex-to-telegram.example.toml
-python -m exodus_agent telegram-execute-plan \
+exodus telegram-execute-plan \
   --config examples/webex-to-telegram.example.toml \
   --adapter-command "exodus-telegram-mtproto-runner"
-python -m exodus_agent telegram-dry-run-workflow \
+exodus telegram-dry-run-workflow \
   --config examples/webex-to-telegram.example.toml \
   --destination-map destination-map.json
-WEBEX_ACCESS_TOKEN=... python -m exodus_agent webex-telegram-dry-run \
+WEBEX_ACCESS_TOKEN=... exodus webex-telegram-dry-run \
   --config examples/webex-to-telegram.example.toml \
   --destination-map destination-map.json
-python -m exodus_agent teams-identity-map-template \
+exodus teams-identity-map-template \
   --config examples/webex-to-teams.example.toml
 python -m exodus_agent teams-conversation-map-template \
   --config examples/webex-to-teams.example.toml \

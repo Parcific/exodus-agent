@@ -53,7 +53,10 @@ class WebexClient:
                 if attempt < self.max_retries:
                     self.sleeper(_retry_after(response_headers))
                     continue
-                raise WebexApiError(f"Webex API request exceeded retry limit: url={redact_text(url)}")
+                raise WebexApiError(
+                    f"Webex API rate-limit retries exhausted after {self.max_retries + 1} attempts:"
+                    f" url={redact_text(url)}"
+                )
             if status >= 400:
                 raise WebexApiError(f"Webex API request failed: status={status} url={redact_text(url)}")
             payload = _decode_json_object(body, url)
@@ -74,7 +77,10 @@ class WebexClient:
                 if attempt < self.max_retries:
                     self.sleeper(_retry_after(response_headers))
                     continue
-                raise WebexApiError(f"Webex file request exceeded retry limit: url={redact_text(url)}")
+                raise WebexApiError(
+                    f"Webex file rate-limit retries exhausted after {self.max_retries + 1} attempts:"
+                    f" url={redact_text(url)}"
+                )
             if status >= 400:
                 raise WebexApiError(f"Webex file request failed: status={status} url={redact_text(url)}")
             return body

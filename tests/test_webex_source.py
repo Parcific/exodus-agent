@@ -157,7 +157,7 @@ class WebexSourceTests(unittest.TestCase):
         self.assertEqual(client.get("/people/me")["id"], "person-1")
         self.assertEqual(sleeps, [2.0])
 
-    def test_get_raises_exceeded_retry_limit_after_all_429s(self) -> None:
+    def test_get_raises_retries_exhausted_after_all_429s(self) -> None:
         calls: list[int] = []
 
         def transport(url: str, headers: dict[str, str]) -> tuple[int, dict[str, str], bytes]:
@@ -166,11 +166,11 @@ class WebexSourceTests(unittest.TestCase):
 
         client = WebexClient("token", transport=transport, sleeper=lambda _: None, max_retries=3)
 
-        with self.assertRaisesRegex(WebexApiError, "exceeded retry limit"):
+        with self.assertRaisesRegex(WebexApiError, "retries exhausted after 4 attempts"):
             client.get("https://webexapis.com/v1/people/me")
         self.assertEqual(len(calls), 4)  # initial + 3 retries
 
-    def test_get_bytes_raises_exceeded_retry_limit_after_all_429s(self) -> None:
+    def test_get_bytes_raises_retries_exhausted_after_all_429s(self) -> None:
         calls: list[int] = []
 
         def transport(url: str, headers: dict[str, str]) -> tuple[int, dict[str, str], bytes]:
@@ -179,7 +179,7 @@ class WebexSourceTests(unittest.TestCase):
 
         client = WebexClient("token", transport=transport, sleeper=lambda _: None, max_retries=3)
 
-        with self.assertRaisesRegex(WebexApiError, "exceeded retry limit"):
+        with self.assertRaisesRegex(WebexApiError, "retries exhausted after 4 attempts"):
             client.get_bytes("https://webexapis.com/v1/files/1")
         self.assertEqual(len(calls), 4)  # initial + 3 retries
 
