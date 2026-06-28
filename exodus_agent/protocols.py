@@ -34,6 +34,16 @@ class MembershipSource(Protocol):
         """Return per-conversation memberships in scope for the migration."""
 
 
+@runtime_checkable
+class ClipAwareMessageSource(Protocol):
+    def get_excluded_root_ids(self, conversation: Conversation) -> frozenset[str]:
+        """Return IDs of messages excluded by the time-window filter (e.g. message_since clip).
+
+        Must be called after list_messages for the same conversation, as implementations
+        typically populate this during the list_messages call.
+        """
+
+
 class HistoricalImportTarget(Protocol):
     def prepare(self, conversations: Iterable[Conversation], participants: Iterable[Participant]) -> None:
         """Create or bind destination containers and validate import eligibility."""

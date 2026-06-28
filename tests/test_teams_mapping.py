@@ -3,8 +3,9 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 from exodus_agent.archive import Archive
 from exodus_agent.model import Attachment, Conversation, ConversationKind, ConversationMembership, Message, Participant
@@ -1040,7 +1041,11 @@ class TeamsMappingTests(unittest.TestCase):
                     import_time=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc),
                 )
 
-    def test_prepare_teams_import_messages_rejects_collision_adjustment_into_future(self) -> None:
+    def test_prepare_teams_import_messages_caps_collision_adjustment_at_cutoff(self) -> None:
+        # Both messages share a timestamp exactly equal to import_cutoff.  The second
+        # message's collision bump would overshoot the cutoff by 1 ms; the fix caps it
+        # back to import_cutoff and records "cutoff_capped" in the audit reason instead
+        # of aborting with a ValueError.
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             archive = Archive(root / "archive")
@@ -1075,13 +1080,16 @@ class TeamsMappingTests(unittest.TestCase):
                 ),
             )
 
-            with self.assertRaisesRegex(ValueError, "adjusted createdDateTime"):
-                prepare_teams_import_messages(
-                    archive=archive,
-                    conversation_map=conversation_map,
-                    identity_map={"u1": "entra-u1", "u2": "entra-u2"},
-                    import_time=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc),
-                )
+            messages = prepare_teams_import_messages(
+                archive=archive,
+                conversation_map=conversation_map,
+                identity_map={"u1": "entra-u1", "u2": "entra-u2"},
+                import_time=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc),
+            )
+
+            self.assertEqual(len(messages), 2)
+            self.assertTrue(messages[1].timestamp_adjusted)
+            self.assertIn("cutoff_capped", messages[1].timestamp_adjustment_reason or "")
 
     def test_prepare_teams_import_messages_orders_parent_before_earlier_reply(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1639,6 +1647,118 @@ class TeamsMappingTests(unittest.TestCase):
                     identity_map={"u1": "entra-u1", "u2": "entra-u2"},
                     output_path=output,
                 )
+
+    def test_unsupported_attachments_counts_only_unsupported(self) -> None:
+        # Bug fix regression: unsupported_attachments used to count ALL attachments.
+        # When _attachment_to_plan_json returns supported=True the count must be 0.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            archive = Archive(root / "archive")
+            archive.initialize(source_kind="webex", target_kind="teams", name="demo")
+            archive.write_conversations(
+                [Conversation(source_id="space-1", kind=ConversationKind.SPACE, title="Project")]
+            )
+            archive.write_messages(
+                "space-1",
+                [
+                    Message(
+                        source_id="msg-1",
+                        conversation_id="space-1",
+                        author_id="u1",
+                        created_at=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc),
+                        text="with file",
+                        attachments=(
+                            Attachment(
+                                source_id="file-1",
+                                filename="notes.txt",
+                                mime_type="text/plain",
+                                size_bytes=12,
+                                sha256="abc",
+                                local_path="attachments/notes.txt",
+                            ),
+                        ),
+                    )
+                ],
+            )
+            conversation_map = (
+                CompletedTeamsConversationMapping(
+                    source_conversation_id="space-1",
+                    target_kind=TeamsTargetKind.GROUP_CHAT,
+                    target={"chat_id": "chat-1"},
+                ),
+            )
+            output = root / "teams-import-plan.json"
+
+            supported_attachment = {
+                "source_attachment_id": "file-1",
+                "filename": "notes.txt",
+                "mime_type": "text/plain",
+                "size_bytes": 12,
+                "sha256": "abc",
+                "local_path": "attachments/notes.txt",
+                "supported": True,
+                "reason": None,
+            }
+            with patch(
+                "exodus_agent.targets.teams_mapping._attachment_to_plan_json",
+                return_value=supported_attachment,
+            ):
+                result = write_teams_import_plan(
+                    archive=archive,
+                    conversation_map=conversation_map,
+                    identity_map={"u1": "entra-u1"},
+                    output_path=output,
+                )
+
+            self.assertEqual(result.attachments, 1)
+            self.assertEqual(result.unsupported_attachments, 0)
+
+    def test_many_same_timestamp_messages_near_cutoff_do_not_abort(self) -> None:
+        # Bug fix regression: 10 messages sharing a timestamp 5 ms before now() caused
+        # the collision-bump loop to overshoot the cutoff and abort with ValueError.
+        # The fix caps overshot timestamps at import_cutoff instead of aborting.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            archive = Archive(root / "archive")
+            archive.initialize(source_kind="webex", target_kind="teams", name="demo")
+            archive.write_conversations(
+                [Conversation(source_id="space-1", kind=ConversationKind.SPACE, title="Project")]
+            )
+            import_time = datetime.now(tz=timezone.utc)
+            shared_ts = import_time - timedelta(milliseconds=5)
+            archive.write_messages(
+                "space-1",
+                [
+                    Message(
+                        source_id=f"msg-{i}",
+                        conversation_id="space-1",
+                        author_id="u1",
+                        created_at=shared_ts,
+                        text=f"message {i}",
+                    )
+                    for i in range(10)
+                ],
+            )
+            conversation_map = (
+                CompletedTeamsConversationMapping(
+                    source_conversation_id="space-1",
+                    target_kind=TeamsTargetKind.GROUP_CHAT,
+                    target={"chat_id": "chat-1"},
+                ),
+            )
+
+            # Must complete without ValueError even though bumped timestamps exceed cutoff
+            messages = prepare_teams_import_messages(
+                archive=archive,
+                conversation_map=conversation_map,
+                identity_map={"u1": "entra-u1"},
+                import_time=import_time,
+            )
+
+            self.assertEqual(len(messages), 10)
+            # Messages that required capping must flag it in the audit reason
+            capped = [m for m in messages if m.timestamp_adjustment_reason and "cutoff_capped" in m.timestamp_adjustment_reason]
+            self.assertGreater(len(capped), 0)
 
     def test_teams_import_plan_rejects_directory_output_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

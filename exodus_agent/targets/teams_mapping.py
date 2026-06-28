@@ -390,16 +390,16 @@ def prepare_teams_import_messages(
                     created_at = parent_created_at + timedelta(milliseconds=1)
             while created_at in used_timestamps:
                 created_at += timedelta(milliseconds=1)
-            if created_at > import_cutoff:
-                raise ValueError(
-                    f"Message {message.source_id} adjusted createdDateTime is in the future for Teams import"
-                )
+            timestamp_capped = created_at > import_cutoff
+            if timestamp_capped:
+                created_at = import_cutoff
             used_timestamps.add(created_at)
             prepared_timestamps_by_source[message.source_id] = created_at
             adjustment_ms = int((created_at - _truncate_to_millisecond(original_created_at)).total_seconds() * 1000)
             reason = _timestamp_adjustment_reason(
                 precision_adjusted=precision_adjusted,
                 collision_adjustment_ms=adjustment_ms,
+                cutoff_capped=timestamp_capped,
             )
             prepared.append(
                 TeamsPreparedMessage(
@@ -452,7 +452,9 @@ def write_teams_import_plan(
         conversations=len(conversation_map),
         messages=len(prepared_messages),
         attachments=sum(len(message.attachments) for message in prepared_messages),
-        unsupported_attachments=sum(len(message.attachments) for message in prepared_messages),
+        unsupported_attachments=sum(
+            1 for message in prepared_messages for a in message.attachments if a.get("supported") is False
+        ),
         timestamp_adjustments=sum(1 for message in prepared_messages if message.timestamp_adjusted),
     )
 
