@@ -81,8 +81,11 @@ def execute_teams_import_plan(
             issues=tuple(issues),
         )
 
+    _MESSAGE_MAP_FLUSH_EVERY = 100
+
     imported = 0
     skipped = 0
+    _map_dirty = False
     _append_event(
         job_store,
         job_id,
@@ -116,7 +119,7 @@ def execute_teams_import_plan(
             issues.append(f"Message {source_message_id} adapter did not return teams_message_id")
             break
         message_map[source_message_id] = teams_message_id.strip()
-        _write_message_map(message_map_path, message_map)
+        _map_dirty = True
         imported += 1
         _append_event(
             job_store,
@@ -127,6 +130,12 @@ def execute_teams_import_plan(
             teams_message_id=teams_message_id.strip(),
             adapter_result=redact_sensitive(result),
         )
+        if imported % _MESSAGE_MAP_FLUSH_EVERY == 0:
+            _write_message_map(message_map_path, message_map)
+            _map_dirty = False
+
+    if _map_dirty:
+        _write_message_map(message_map_path, message_map)
 
     if issues:
         _append_event(job_store, job_id, JobEventKind.ERROR, "teams_import", issues=issues)
