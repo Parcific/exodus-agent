@@ -1,0 +1,42 @@
+# Version control
+.git/
+.gitignore
+
+# Python caches
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Local workspace / migration artifacts (never bake into the image)
+.exodus/
+*.session
+*.session-journal
+.env
+.env.*
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Dev / IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Tests (not needed at runtime)
+tests/
+
+# Docs and examples (not needed at runtime; saves ~50 KB)
+docs/
+HANDOFF.md
+CLAUDE.md
+
+# Build artifacts
+scripts/
+*.tar.gz
+*.whl
