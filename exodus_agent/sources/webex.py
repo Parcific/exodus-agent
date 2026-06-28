@@ -41,31 +41,38 @@ class WebexClient:
     sleeper: Sleeper = time.sleep
     max_retries: int = 3
 
+    def _request_with_backoff(
+        self, url: str, headers: dict[str, str], error_prefix: str
+    ) -> tuple[int, dict[str, str], bytes]:
+        for attempt in range(self.max_retries + 1):
+            status, response_headers, body = self._request(url, headers)
+            if status != 429:
+                return status, response_headers, body
+            if attempt < self.max_retries:
+                self.sleeper(_retry_after(response_headers))
+                continue
+            total = self.max_retries + 1
+            raise WebexApiError(
+                f"{error_prefix} retries exhausted after"
+                f" {total} {'attempt' if total == 1 else 'attempts'}:"
+                f" url={redact_text(url)}"
+            )
+        raise AssertionError("unreachable: loop always returns or raises")  # pragma: no cover
+
     def get(self, path_or_url: str, params: dict[str, object] | None = None) -> dict[str, Any]:
         url = self._url(path_or_url, params)
         headers = {
             "Accept": "application/json",
             "Authorization": f"Bearer {self.access_token}",
         }
-        for attempt in range(self.max_retries + 1):
-            status, response_headers, body = self._request(url, headers)
-            if status == 429:
-                if attempt < self.max_retries:
-                    self.sleeper(_retry_after(response_headers))
-                    continue
-                total = self.max_retries + 1
-                raise WebexApiError(
-                    f"Webex API rate-limit retries exhausted after"
-                    f" {total} {'attempt' if total == 1 else 'attempts'}:"
-                    f" url={redact_text(url)}"
-                )
-            if status >= 400:
-                raise WebexApiError(f"Webex API request failed: status={status} url={redact_text(url)}")
-            payload = _decode_json_object(body, url)
-            if not isinstance(payload, dict):
-                raise WebexApiError(f"Webex API returned a non-object response: url={redact_text(url)}")
-            payload["_headers"] = response_headers
-            return payload
+        status, response_headers, body = self._request_with_backoff(url, headers, "Webex API rate-limit")
+        if status >= 400:
+            raise WebexApiError(f"Webex API request failed: status={status} url={redact_text(url)}")
+        payload = _decode_json_object(body, url)
+        if not isinstance(payload, dict):
+            raise WebexApiError(f"Webex API returned a non-object response: url={redact_text(url)}")
+        payload["_headers"] = response_headers
+        return payload
 
     def get_bytes(self, path_or_url: str, params: dict[str, object] | None = None) -> bytes:
         url = self._url(path_or_url, params)
@@ -73,21 +80,10 @@ class WebexClient:
             "Accept": "*/*",
             "Authorization": f"Bearer {self.access_token}",
         }
-        for attempt in range(self.max_retries + 1):
-            status, response_headers, body = self._request(url, headers)
-            if status == 429:
-                if attempt < self.max_retries:
-                    self.sleeper(_retry_after(response_headers))
-                    continue
-                total = self.max_retries + 1
-                raise WebexApiError(
-                    f"Webex file rate-limit retries exhausted after"
-                    f" {total} {'attempt' if total == 1 else 'attempts'}:"
-                    f" url={redact_text(url)}"
-                )
-            if status >= 400:
-                raise WebexApiError(f"Webex file request failed: status={status} url={redact_text(url)}")
-            return body
+        status, response_headers, body = self._request_with_backoff(url, headers, "Webex file rate-limit")
+        if status >= 400:
+            raise WebexApiError(f"Webex file request failed: status={status} url={redact_text(url)}")
+        return body
 
     def paged_items(self, path: str, params: dict[str, object] | None = None) -> Iterable[dict[str, Any]]:
         next_url: str | None = self._url(path, params)
