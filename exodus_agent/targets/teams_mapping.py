@@ -949,20 +949,29 @@ def _ordered_messages_for_import(
     visiting: set[str] = set()
     visited: set[str] = set()
 
-    def visit(message: Message) -> None:
+    # Iterative DFS — avoids Python recursion-limit problems on deep threads.
+    # Stack entries: (message, returning).  returning=True is the post-order pop
+    # used only to move the node from visiting → visited for cycle detection.
+    stack: list[tuple[Message, bool]] = [
+        (root, False)
+        for root in reversed(sorted(roots, key=_message_sort_key))
+    ]
+    while stack:
+        message, returning = stack.pop()
+        if returning:
+            visiting.discard(message.source_id)
+            visited.add(message.source_id)
+            continue
         if message.source_id in visited:
-            return
+            continue
         if message.source_id in visiting:
             raise ValueError(f"Conversation {conversation_id} contains a message parent cycle")
         visiting.add(message.source_id)
         ordered.append(message)
-        for child in children_by_parent.get(message.source_id, []):
-            visit(child)
-        visiting.remove(message.source_id)
-        visited.add(message.source_id)
+        stack.append((message, True))
+        for child in reversed(children_by_parent.get(message.source_id, [])):
+            stack.append((child, False))
 
-    for root in sorted(roots, key=_message_sort_key):
-        visit(root)
     if len(ordered) != len(messages):
         raise ValueError(f"Conversation {conversation_id} contains a message parent cycle")
     return tuple(ordered)
