@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+import urllib.error
 from typing import Any
 from unittest.mock import patch
 
@@ -257,6 +258,17 @@ class TestBuildMessageBody(unittest.TestCase):
         html = body["body"]["content"]
         self.assertIn("Migrated from Webex", html)
 
+    def test_html_special_chars_in_original_created_at_are_escaped(self) -> None:
+        # A corrupted or crafted timestamp containing HTML metacharacters must not
+        # break the <em> tag or enable injection into the Teams message body.
+        body = _build_message_body({
+            "original_created_at": "2024</em><img src=x>",
+            "content": "<p>Hello</p>",
+        })
+        content = body["body"]["content"]
+        self.assertNotIn("</em><img", content)
+        self.assertIn("&lt;/em&gt;", content)
+
 
 # ---------------------------------------------------------------------------
 # GraphTeamsAdapter.import_message tests
@@ -397,6 +409,53 @@ class TestGraphTeamsAdapterImportMessage(unittest.TestCase):
         result = adapter.import_message(_chat_message())
         self.assertEqual(result["graph_created_date_time"], "2024-01-15T10:00:00.000Z")
 
+    def test_retries_on_url_error_then_succeeds(self) -> None:
+        # URLError (DNS failure, TCP reset) must consume retry budget, not abort immediately.
+        calls: list[int] = []
+
+        def transport(method: str, url: str, token: str, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+            calls.append(1)
+            if len(calls) == 1:
+                raise urllib.error.URLError("Connection reset by peer")
+            return 201, {"id": "msg-after-retry"}
+
+        adapter = _make_adapter(graph_transport=transport)
+        result = adapter.import_message(_chat_message())
+        self.assertEqual(result["teams_message_id"], "msg-after-retry")
+        self.assertEqual(len(calls), 2)
+
+    def test_url_error_exhaustion_raises_graph_api_error(self) -> None:
+        def transport(method: str, url: str, token: str, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+            raise urllib.error.URLError("Connection refused")
+
+        adapter = _make_adapter(graph_transport=transport, max_retries=1)
+        with self.assertRaises(GraphApiError) as ctx:
+            adapter.import_message(_chat_message())
+        self.assertIn("network error", str(ctx.exception))
+
+    def test_token_is_invalidated_when_401_retries_exhausted(self) -> None:
+        # After exhausting 401 retries, the known-bad token must be cleared so that the
+        # next call to import_message fetches a fresh token rather than reusing the rejected one.
+        token_fetches: list[int] = []
+
+        def oauth(url: str, form_data: dict[str, str]) -> tuple[int, dict[str, Any]]:
+            token_fetches.append(1)
+            return 200, {"access_token": f"tok-{len(token_fetches)}", "expires_in": 3600}
+
+        def transport(method: str, url: str, token: str, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+            return 401, {}
+
+        adapter = _make_adapter(graph_transport=transport, oauth_transport=oauth, max_retries=0)
+        with self.assertRaises(GraphApiError):
+            adapter.import_message(_chat_message())
+        # After exhaustion, _tokens._expires_at must be 0.0 (invalidated).
+        self.assertEqual(adapter._tokens._expires_at, 0.0)
+
+    def test_client_secret_cleared_after_init(self) -> None:
+        # The plaintext credential must not linger on the adapter after __post_init__.
+        adapter = _make_adapter(client_secret="s3cr3t")
+        self.assertEqual(adapter.client_secret, "")
+
 
 # ---------------------------------------------------------------------------
 # _parse_retry_after + _graph_error_message helpers
@@ -412,6 +471,11 @@ class TestHelpers(unittest.TestCase):
 
     def test_parse_retry_after_negative_clamped_to_zero(self) -> None:
         self.assertEqual(_parse_retry_after({"_retry_after": -3}), 0.0)
+
+    def test_parse_retry_after_zero_returns_zero_not_default(self) -> None:
+        # A Retry-After: 0 header means retry immediately; must NOT return the 1.0 default.
+        self.assertEqual(_parse_retry_after({"_retry_after": 0.0}), 0.0)
+        self.assertEqual(_parse_retry_after({"_retry_after": 0}), 0.0)
 
     def test_graph_error_message_extracts_code_and_message(self) -> None:
         msg = _graph_error_message({"error": {"code": "Forbidden", "message": "No access"}})

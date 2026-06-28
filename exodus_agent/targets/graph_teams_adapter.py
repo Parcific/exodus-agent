@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import html
 import json
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 
 
 # Injectable transport seams — callers can supply fakes for testing.
@@ -87,9 +89,11 @@ class _TokenCache:
         except HTTPError as exc:
             try:
                 body = json.loads(exc.read())
-            except Exception:
+            except (json.JSONDecodeError, ValueError, OSError):
                 body = {}
             return exc.code, body
+        # URLError (non-HTTPError: DNS failure, TCP reset) propagates to _post_with_retry
+        # which retries it transparently.
 
 
 @dataclass
@@ -119,6 +123,8 @@ class GraphTeamsAdapter:
             client_secret=self.client_secret,
             oauth_transport=self.oauth_transport,
         )
+        # _tokens owns the credential from here; clear the plaintext copy on the adapter.
+        self.client_secret = ""
 
     def import_message(self, message: Mapping[str, object]) -> dict[str, object]:
         source_message_id = message.get("source_message_id")
@@ -145,8 +151,19 @@ class GraphTeamsAdapter:
         self, url: str, body: dict[str, Any], source_message_id: str
     ) -> dict[str, Any]:
         for attempt in range(self.max_retries + 1):
-            token = self._tokens.get()
-            status, response = self._do_graph("POST", url, token, body)
+            try:
+                token = self._tokens.get()
+                status, response = self._do_graph("POST", url, token, body)
+            except URLError as exc:
+                # Transient network failure (DNS, TCP reset, TLS error) — retry.
+                if attempt < self.max_retries:
+                    self.sleeper(1.0)
+                    continue
+                total = self.max_retries + 1
+                raise GraphApiError(
+                    f"Graph API network error for message {source_message_id}"
+                    f" after {total} {'attempt' if total == 1 else 'attempts'}: {exc.reason}"
+                ) from exc
             if status == 429:
                 if attempt < self.max_retries:
                     self.sleeper(_parse_retry_after(response))
@@ -158,8 +175,8 @@ class GraphTeamsAdapter:
                     f" for message {source_message_id}"
                 )
             if status == 401:
+                self._tokens.invalidate()
                 if attempt < self.max_retries:
-                    self._tokens.invalidate()
                     continue
                 raise GraphApiError(
                     f"Graph API authentication failed for message {source_message_id}: status=401"
@@ -194,7 +211,7 @@ class GraphTeamsAdapter:
         except HTTPError as exc:
             try:
                 resp_body: dict[str, Any] = json.loads(exc.read())
-            except Exception:
+            except (json.JSONDecodeError, ValueError, OSError):
                 resp_body = {}
             retry_after = exc.headers.get("Retry-After")
             if retry_after is not None:
@@ -203,6 +220,7 @@ class GraphTeamsAdapter:
                 except ValueError:
                     pass
             return exc.code, resp_body
+        # URLError (non-HTTPError) propagates to _post_with_retry for retry handling.
 
 
 # Characters legal in URL path segments per RFC 3986 and common in Graph API IDs
@@ -246,7 +264,7 @@ def _build_message_body(message: Mapping[str, object]) -> dict[str, Any]:
     if isinstance(original_created_at, str) and original_created_at:
         header = (
             f"<p><em>Migrated from Webex"
-            f" | Originally sent: {original_created_at}</em></p>"
+            f" | Originally sent: {html.escape(original_created_at)}</em></p>"
         )
     else:
         header = "<p><em>Migrated from Webex</em></p>"
@@ -257,7 +275,9 @@ def _build_message_body(message: Mapping[str, object]) -> dict[str, Any]:
 
 
 def _parse_retry_after(response: dict[str, Any]) -> float:
-    value = response.get("_retry_after") or response.get("retry_after")
+    value = response.get("_retry_after")
+    if value is None:
+        value = response.get("retry_after")
     try:
         return max(0.0, float(value))  # type: ignore[arg-type]
     except (TypeError, ValueError):
