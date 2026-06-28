@@ -183,6 +183,24 @@ class WebexSourceTests(unittest.TestCase):
             client.get_bytes("https://webexapis.com/v1/files/1")
         self.assertEqual(len(calls), 4)  # initial + 3 retries
 
+    def test_get_zero_retries_uses_singular_attempt_grammar(self) -> None:
+        def transport(url: str, headers: dict[str, str]) -> tuple[int, dict[str, str], bytes]:
+            return 429, {"retry-after": "0"}, b'{"message":"slow down"}'
+
+        client = WebexClient("token", transport=transport, sleeper=lambda _: None, max_retries=0)
+
+        with self.assertRaisesRegex(WebexApiError, "after 1 attempt:"):
+            client.get("https://webexapis.com/v1/people/me")
+
+    def test_get_bytes_zero_retries_uses_singular_attempt_grammar(self) -> None:
+        def transport(url: str, headers: dict[str, str]) -> tuple[int, dict[str, str], bytes]:
+            return 429, {"retry-after": "0"}, b""
+
+        client = WebexClient("token", transport=transport, sleeper=lambda _: None, max_retries=0)
+
+        with self.assertRaisesRegex(WebexApiError, "after 1 attempt:"):
+            client.get_bytes("https://webexapis.com/v1/files/1")
+
     def test_redacts_secret_query_params_in_webex_errors(self) -> None:
         transport = FakeWebexTransport()
         transport.add("/messages", {"message": "bad"}, status=400)

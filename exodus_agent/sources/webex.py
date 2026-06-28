@@ -53,8 +53,10 @@ class WebexClient:
                 if attempt < self.max_retries:
                     self.sleeper(_retry_after(response_headers))
                     continue
+                total = self.max_retries + 1
                 raise WebexApiError(
-                    f"Webex API rate-limit retries exhausted after {self.max_retries + 1} attempts:"
+                    f"Webex API rate-limit retries exhausted after"
+                    f" {total} {'attempt' if total == 1 else 'attempts'}:"
                     f" url={redact_text(url)}"
                 )
             if status >= 400:
@@ -77,8 +79,10 @@ class WebexClient:
                 if attempt < self.max_retries:
                     self.sleeper(_retry_after(response_headers))
                     continue
+                total = self.max_retries + 1
                 raise WebexApiError(
-                    f"Webex file rate-limit retries exhausted after {self.max_retries + 1} attempts:"
+                    f"Webex file rate-limit retries exhausted after"
+                    f" {total} {'attempt' if total == 1 else 'attempts'}:"
                     f" url={redact_text(url)}"
                 )
             if status >= 400:
