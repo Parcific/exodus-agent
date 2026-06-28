@@ -157,6 +157,32 @@ class WebexSourceTests(unittest.TestCase):
         self.assertEqual(client.get("/people/me")["id"], "person-1")
         self.assertEqual(sleeps, [2.0])
 
+    def test_get_raises_exceeded_retry_limit_after_all_429s(self) -> None:
+        calls: list[int] = []
+
+        def transport(url: str, headers: dict[str, str]) -> tuple[int, dict[str, str], bytes]:
+            calls.append(1)
+            return 429, {"retry-after": "0"}, b'{"message":"slow down"}'
+
+        client = WebexClient("token", transport=transport, sleeper=lambda _: None, max_retries=3)
+
+        with self.assertRaisesRegex(WebexApiError, "exceeded retry limit"):
+            client.get("https://webexapis.com/v1/people/me")
+        self.assertEqual(len(calls), 4)  # initial + 3 retries
+
+    def test_get_bytes_raises_exceeded_retry_limit_after_all_429s(self) -> None:
+        calls: list[int] = []
+
+        def transport(url: str, headers: dict[str, str]) -> tuple[int, dict[str, str], bytes]:
+            calls.append(1)
+            return 429, {"retry-after": "0"}, b""
+
+        client = WebexClient("token", transport=transport, sleeper=lambda _: None, max_retries=3)
+
+        with self.assertRaisesRegex(WebexApiError, "exceeded retry limit"):
+            client.get_bytes("https://webexapis.com/v1/files/1")
+        self.assertEqual(len(calls), 4)  # initial + 3 retries
+
     def test_redacts_secret_query_params_in_webex_errors(self) -> None:
         transport = FakeWebexTransport()
         transport.add("/messages", {"message": "bad"}, status=400)

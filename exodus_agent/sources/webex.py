@@ -49,9 +49,11 @@ class WebexClient:
         }
         for attempt in range(self.max_retries + 1):
             status, response_headers, body = self._request(url, headers)
-            if status == 429 and attempt < self.max_retries:
-                self.sleeper(_retry_after(response_headers))
-                continue
+            if status == 429:
+                if attempt < self.max_retries:
+                    self.sleeper(_retry_after(response_headers))
+                    continue
+                raise WebexApiError(f"Webex API request exceeded retry limit: url={redact_text(url)}")
             if status >= 400:
                 raise WebexApiError(f"Webex API request failed: status={status} url={redact_text(url)}")
             payload = _decode_json_object(body, url)
@@ -59,7 +61,6 @@ class WebexClient:
                 raise WebexApiError(f"Webex API returned a non-object response: url={redact_text(url)}")
             payload["_headers"] = response_headers
             return payload
-        raise WebexApiError(f"Webex API request exceeded retry limit: url={redact_text(url)}")
 
     def get_bytes(self, path_or_url: str, params: dict[str, object] | None = None) -> bytes:
         url = self._url(path_or_url, params)
@@ -69,13 +70,14 @@ class WebexClient:
         }
         for attempt in range(self.max_retries + 1):
             status, response_headers, body = self._request(url, headers)
-            if status == 429 and attempt < self.max_retries:
-                self.sleeper(_retry_after(response_headers))
-                continue
+            if status == 429:
+                if attempt < self.max_retries:
+                    self.sleeper(_retry_after(response_headers))
+                    continue
+                raise WebexApiError(f"Webex file request exceeded retry limit: url={redact_text(url)}")
             if status >= 400:
                 raise WebexApiError(f"Webex file request failed: status={status} url={redact_text(url)}")
             return body
-        raise WebexApiError(f"Webex file request exceeded retry limit: url={redact_text(url)}")
 
     def paged_items(self, path: str, params: dict[str, object] | None = None) -> Iterable[dict[str, Any]]:
         next_url: str | None = self._url(path, params)
