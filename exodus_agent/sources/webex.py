@@ -225,7 +225,7 @@ def source_from_config(config: EndpointConfig) -> WebexSource:
     if message_since is not None and message_before is not None and message_since >= message_before:
         raise ValueError("source.message_since must be before source.message_before")
     return WebexSource(
-        client=WebexClient(access_token=token),
+        client=WebexClient(access_token=token.reveal()),
         room_ids=room_ids,
         max_page_size=max_page_size,
         message_since=message_since,

@@ -9,6 +9,7 @@ from typing import Callable, TypeVar
 
 from .archive import Archive
 from .config import load_config
+from .secrets import SecretResolutionError, resolve_secret
 from .job import JobStore, validate_job_id
 from .planner import build_plan
 from .runner import export_dry_run
@@ -230,6 +231,11 @@ def main(argv: list[str] | None = None) -> None:
         print(f"Mode: {config.mode}")
         print(f"Runtime: {config.runtime}")
         print(f"Workspace: {config.workspace}")
+        try:
+            resolve_secret(config.source.settings.get("auth"), field_name="source.auth")
+            print("Secrets: OK")
+        except SecretResolutionError as exc:
+            print(f"Secrets: FAILED — {exc}")
         if plan.warnings:
             print("Warnings:")
             for warning in plan.warnings:
