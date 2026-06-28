@@ -11,6 +11,8 @@ from pathlib import Path
 from exodus_agent.archive import Archive
 from exodus_agent.model import Attachment, Conversation, ConversationKind, ConversationMembership, Message, Participant
 
+from .teams_shared import _as_utc, _truncate_to_millisecond, _timestamp_adjustment_reason
+
 
 class TeamsTargetKind(StrEnum):
     ONE_ON_ONE_CHAT = "one_on_one_chat"
@@ -968,16 +970,6 @@ def _message_sort_key(message: Message) -> tuple[datetime, str]:
     return (_as_utc(message.created_at), message.source_id)
 
 
-def _as_utc(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
-
-
-def _truncate_to_millisecond(value: datetime) -> datetime:
-    utc_value = _as_utc(value)
-    return utc_value.replace(microsecond=(utc_value.microsecond // 1000) * 1000)
-
 
 def _graph_datetime(value: datetime) -> str:
     utc_value = _as_utc(value)
@@ -989,14 +981,3 @@ def _audit_datetime(value: datetime) -> str:
     return _as_utc(value).isoformat().replace("+00:00", "Z")
 
 
-def _timestamp_adjustment_reason(
-    *,
-    precision_adjusted: bool,
-    collision_adjustment_ms: int,
-) -> str | None:
-    reasons: list[str] = []
-    if precision_adjusted:
-        reasons.append("millisecond_precision")
-    if collision_adjustment_ms:
-        reasons.append("timestamp_collision")
-    return ",".join(reasons) if reasons else None

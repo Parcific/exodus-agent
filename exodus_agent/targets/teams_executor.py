@@ -10,6 +10,8 @@ from typing import Protocol
 from exodus_agent.job import JobEvent, JobEventKind, JobStore
 from exodus_agent.redaction import redact_sensitive, redact_text
 
+from .teams_shared import _truncate_to_millisecond, _timestamp_adjustment_reason
+
 
 class TeamsMessageAdapter(Protocol):
     def import_message(self, message: Mapping[str, object]) -> dict[str, object]:
@@ -571,22 +573,6 @@ def _has_exact_millisecond_precision(value: str) -> bool:
     fraction = timestamp.rsplit(".", 1)[1]
     return len(fraction) == 3 and fraction.isdigit()
 
-
-def _truncate_to_millisecond(value: datetime) -> datetime:
-    return value.replace(microsecond=(value.microsecond // 1000) * 1000)
-
-
-def _timestamp_adjustment_reason(
-    *,
-    precision_adjusted: bool,
-    collision_adjustment_ms: int,
-) -> str | None:
-    reasons: list[str] = []
-    if precision_adjusted:
-        reasons.append("millisecond_precision")
-    if collision_adjustment_ms:
-        reasons.append("timestamp_collision")
-    return ",".join(reasons) if reasons else None
 
 
 def _message_target_key(message: Mapping[str, object]) -> str:
