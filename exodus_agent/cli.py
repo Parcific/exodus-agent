@@ -686,8 +686,10 @@ def main(argv: list[str] | None = None) -> None:
         report_path = args.report or (
             config.workspace / "archive" / "reports" / "teams-import-verification.json"
         )
+        adapter = _run_cli_action(lambda: _teams_adapter_from_config(config))
+        print(f"Adapter: {type(adapter).__name__}")
         result = _run_cli_action(
-            lambda: run_teams_dry_run_workflow(
+            lambda _a=adapter: run_teams_dry_run_workflow(
                 archive=Archive(config.workspace / "archive"),
                 conversation_map=conversation_map,
                 identity_map=identity_map,
@@ -697,6 +699,7 @@ def main(argv: list[str] | None = None) -> None:
                 job_store=_job_store(config.workspace, args.job_id),
                 job_id=args.job_id,
                 overwrite_import_plan=args.overwrite_plan,
+                adapter=_a,
             )
         )
         print(f"Workflow: {'OK' if result.ok else 'FAILED'}")
@@ -834,20 +837,31 @@ def _load_destination_map(path: Path | None) -> dict[str, str]:
 def _teams_adapter_from_config(config: MigrationConfig) -> TeamsMessageAdapter:
     """Build GraphTeamsAdapter if Graph credentials are present in config; else dry-run."""
     settings = config.target.settings
-    tenant_id = settings.get("tenant_id")
-    client_id = settings.get("client_id")
+    raw_tenant = settings.get("tenant_id")
+    raw_client = settings.get("client_id")
     raw_secret = settings.get("client_secret")
-    if (
-        isinstance(tenant_id, str) and tenant_id.strip()
-        and isinstance(client_id, str) and client_id.strip()
-        and isinstance(raw_secret, str) and raw_secret.strip()
-    ):
+    has_tenant = isinstance(raw_tenant, str) and raw_tenant.strip()
+    has_client = isinstance(raw_client, str) and raw_client.strip()
+    has_secret = isinstance(raw_secret, str) and raw_secret.strip()
+    if has_tenant or has_client or has_secret:
+        missing = [name for name, present in [
+            ("tenant_id", has_tenant),
+            ("client_id", has_client),
+            ("client_secret", has_secret),
+        ] if not present]
+        if missing:
+            raise ValueError(
+                f"Partial Graph credentials in [target]: missing {', '.join(missing)}."
+                f" Provide all three (tenant_id, client_id, client_secret) or none."
+            )
         from .targets.graph_teams_adapter import GraphTeamsAdapter
-        secret = resolve_secret(raw_secret, field_name="target.client_secret")
+        tenant_id = resolve_secret(raw_tenant, field_name="target.tenant_id").reveal()  # type: ignore[arg-type]
+        client_id = resolve_secret(raw_client, field_name="target.client_id").reveal()  # type: ignore[arg-type]
+        client_secret = resolve_secret(raw_secret, field_name="target.client_secret").reveal()  # type: ignore[arg-type]
         return GraphTeamsAdapter(
-            tenant_id=tenant_id.strip(),
-            client_id=client_id.strip(),
-            client_secret=secret.reveal(),
+            tenant_id=tenant_id,
+            client_id=client_id,
+            client_secret=client_secret,
         )
     return DryRunTeamsAdapter()
 

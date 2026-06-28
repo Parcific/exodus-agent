@@ -13,8 +13,10 @@ from exodus_agent.cli import (
     _load_entra_identity_prefill_for_cli,
     _load_teams_conversation_map_for_cli,
     _load_teams_identity_map_for_cli,
+    _teams_adapter_from_config,
     main,
 )
+from exodus_agent.config import EndpointConfig, MigrationConfig
 from exodus_agent.model import Attachment, Conversation, ConversationKind, Message, Participant, Workspace
 
 
@@ -768,6 +770,74 @@ kind = "teams"
             with patch("exodus_agent.cli.webex_source_from_config", return_value=FakeCliWebexSource()):
                 with self.assertRaisesRegex(SystemExit, "already exists"):
                     main(["export-dry-run", "--config", str(config_path), "--job-id", "run-1"])
+
+
+class TestTeamsAdapterFromConfig(unittest.TestCase):
+    """Unit tests for _teams_adapter_from_config credential detection."""
+
+    def _make_config(self, target_settings: dict) -> MigrationConfig:
+        return MigrationConfig(
+            name="test",
+            mode="individual",
+            runtime="local",
+            workspace=Path("/tmp/ws"),
+            source=EndpointConfig(kind="webex", settings={"auth": "env:WEBEX"}),
+            target=EndpointConfig(kind="teams", settings=target_settings),
+            policy={},
+        )
+
+    def test_returns_dry_run_adapter_when_no_creds(self) -> None:
+        from exodus_agent.targets.teams_executor import DryRunTeamsAdapter
+        config = self._make_config({})
+        adapter = _teams_adapter_from_config(config)
+        self.assertIsInstance(adapter, DryRunTeamsAdapter)
+
+    def test_returns_graph_adapter_when_all_creds_present(self) -> None:
+        from exodus_agent.targets.graph_teams_adapter import GraphTeamsAdapter
+        config = self._make_config({
+            "tenant_id": "my-tenant",
+            "client_id": "my-client",
+            "client_secret": "my-secret",
+        })
+        adapter = _teams_adapter_from_config(config)
+        self.assertIsInstance(adapter, GraphTeamsAdapter)
+
+    def test_raises_on_partial_creds_missing_secret(self) -> None:
+        config = self._make_config({
+            "tenant_id": "my-tenant",
+            "client_id": "my-client",
+            # client_secret absent
+        })
+        with self.assertRaises(ValueError) as ctx:
+            _teams_adapter_from_config(config)
+        self.assertIn("client_secret", str(ctx.exception))
+
+    def test_raises_on_partial_creds_only_tenant(self) -> None:
+        config = self._make_config({"tenant_id": "my-tenant"})
+        with self.assertRaises(ValueError) as ctx:
+            _teams_adapter_from_config(config)
+        self.assertIn("client_id", str(ctx.exception))
+
+    def test_env_notation_resolved_for_tenant_and_client(self) -> None:
+        """tenant_id = "env:VAR" must be resolved, not passed literally."""
+        from exodus_agent.targets.graph_teams_adapter import GraphTeamsAdapter
+        import os
+        os.environ["TEST_TENANT"] = "resolved-tenant"
+        os.environ["TEST_CLIENT"] = "resolved-client"
+        os.environ["TEST_SECRET"] = "resolved-secret"
+        try:
+            config = self._make_config({
+                "tenant_id": "env:TEST_TENANT",
+                "client_id": "env:TEST_CLIENT",
+                "client_secret": "env:TEST_SECRET",
+            })
+            adapter = _teams_adapter_from_config(config)
+            self.assertIsInstance(adapter, GraphTeamsAdapter)
+            self.assertEqual(adapter.tenant_id, "resolved-tenant")
+            self.assertEqual(adapter.client_id, "resolved-client")
+        finally:
+            for key in ("TEST_TENANT", "TEST_CLIENT", "TEST_SECRET"):
+                os.environ.pop(key, None)
 
 
 if __name__ == "__main__":
