@@ -270,7 +270,7 @@ def main(argv: list[str] | None = None) -> None:
             name=config.name,
         )
         store = _job_store(config.workspace, args.job_id)
-        store.create(job_id=args.job_id)
+        _run_cli_action(lambda: store.create(job_id=args.job_id))
         print(f"Initialized job: {args.job_id}")
         print(f"Workspace: {config.workspace}")
         return
@@ -281,15 +281,17 @@ def main(argv: list[str] | None = None) -> None:
         if config.source.kind != "webex":
             raise SystemExit(f"export-dry-run currently supports webex sources, got {config.source.kind!r}")
         source = webex_source_from_config(config.source)
-        result = export_dry_run(
-            job_id=args.job_id,
-            archive=Archive(config.workspace / "archive"),
-            job_store=_job_store(config.workspace, args.job_id),
-            source=source,
-            source_kind=config.source.kind,
-            target_kind=config.target.kind,
-            name=config.name,
-            reset_archive=True,
+        result = _run_cli_action(
+            lambda: export_dry_run(
+                job_id=args.job_id,
+                archive=Archive(config.workspace / "archive"),
+                job_store=_job_store(config.workspace, args.job_id),
+                source=source,
+                source_kind=config.source.kind,
+                target_kind=config.target.kind,
+                name=config.name,
+                reset_archive=True,
+            )
         )
         print(f"Exported conversations: {result.conversations}")
         print(f"Exported participants: {result.participants}")
@@ -820,7 +822,7 @@ def _load_destination_map(path: Path | None) -> dict[str, str]:
 def _run_cli_action(action: Callable[[], T]) -> T:
     try:
         return action()
-    except (FileExistsError, ValueError) as exc:
+    except (FileExistsError, ValueError, SecretResolutionError) as exc:
         raise SystemExit(str(exc)) from exc
 
 

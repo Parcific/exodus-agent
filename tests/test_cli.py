@@ -676,6 +676,98 @@ kind = "telegram"
             with self.assertRaisesRegex(SystemExit, "must be a file"):
                 _load_entra_identity_prefill_for_cli(archive=archive, path=path)
 
+    def test_webex_teams_dry_run_secret_resolution_error_raises_system_exit(self) -> None:
+        """BUG 1: SecretResolutionError (RuntimeError subclass) must surface as SystemExit, not raw traceback."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_path = root / "migration.toml"
+            workspace = root / "workspace"
+            # No 'auth' key under [source] — resolve_secret(None, ...) raises SecretResolutionError.
+            config_path.write_text(
+                f"""
+name = "demo"
+workspace = "{workspace}"
+
+[source]
+kind = "webex"
+
+[target]
+kind = "teams"
+""".strip(),
+                encoding="utf-8",
+            )
+            identity_path = root / "teams-identity-map.json"
+            identity_path.write_text(
+                json.dumps(
+                    {
+                        "format": "exodus.teams.identity_map.v1",
+                        "identities": [{"source_user_id": "u1", "entra_user_id": "entra-u1"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            conversation_path = root / "teams-conversation-map.json"
+            conversation_path.write_text(
+                json.dumps(
+                    {
+                        "format": "exodus.teams.mapping_template.v1",
+                        "conversations": [
+                            {
+                                "source_conversation_id": "room-1",
+                                "target_kind": "group_chat",
+                                "target": {"chat_id": "chat-1"},
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            # webex_source_from_config is called INSIDE the lambda passed to _run_cli_action,
+            # so SecretResolutionError must be caught there and converted to SystemExit.
+            with self.assertRaises(SystemExit):
+                main(
+                    [
+                        "webex-teams-dry-run",
+                        "--config",
+                        str(config_path),
+                        "--identity-map",
+                        str(identity_path),
+                        "--conversation-map",
+                        str(conversation_path),
+                    ]
+                )
+
+    def test_export_dry_run_duplicate_job_id_raises_system_exit(self) -> None:
+        """BUG 2: export-dry-run re-run with the same job-id raises SystemExit, not raw FileExistsError."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_path = root / "migration.toml"
+            workspace = root / "workspace"
+            config_path.write_text(
+                f"""
+name = "demo"
+workspace = "{workspace}"
+
+[source]
+kind = "webex"
+
+[target]
+kind = "teams"
+""".strip(),
+                encoding="utf-8",
+            )
+
+            with patch("exodus_agent.cli.webex_source_from_config", return_value=FakeCliWebexSource()):
+                with patch("builtins.print"):
+                    main(["export-dry-run", "--config", str(config_path), "--job-id", "run-1"])
+
+            # Second call with the same job-id must raise SystemExit("Job already exists: run-1"),
+            # not a raw FileExistsError traceback.
+            with patch("exodus_agent.cli.webex_source_from_config", return_value=FakeCliWebexSource()):
+                with self.assertRaisesRegex(SystemExit, "already exists"):
+                    main(["export-dry-run", "--config", str(config_path), "--job-id", "run-1"])
+
 
 if __name__ == "__main__":
     unittest.main()
