@@ -26,8 +26,8 @@ The dry-run end-to-end is the validation step before that adapter is added.
 ## Prerequisites
 
 ```bash
-# Python 3.11+ required; 3.14 recommended
-python3.14 --version
+# Python 3.11+ required
+python3 --version   # must print 3.11, 3.12, 3.13, or later
 
 # Install the package
 pip install -e .
@@ -128,8 +128,8 @@ in the archive. Each entry looks like:
 ```json
 {
   "source_user_id": "Y2lzY29zcGFyazovL3VzL1BFT...",
-  "source_display_name": "Alice Chen",
-  "source_email": "alice@company.webex.com",
+  "display_name": "Alice Chen",
+  "email": "alice@company.webex.com",
   "entra_user_id": ""
 }
 ```
@@ -172,10 +172,10 @@ Each entry:
 ```json
 {
   "source_conversation_id": "Y2lzY29zcGFya...",
-  "source_title": "Project Alpha",
+  "title": "Project Alpha",
   "target_kind": "group_chat",
   "target": {
-    "members": ["alice@company.com", "bob@company.com"]
+    "chat_id": "<Teams-chat-ID>"
   }
 }
 ```
