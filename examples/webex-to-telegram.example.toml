@@ -1,0 +1,21 @@
+name = "webex-to-telegram"
+mode = "individual" # individual | organization
+workspace = ".exodus/webex-to-telegram"
+runtime = "local" # local | customer_cloud_worker | managed_cloud_worker
+
+[source]
+kind = "webex"
+auth = "env:WEBEX_ACCESS_TOKEN"
+scope = "user_rooms" # selected_rooms | user_rooms | organization
+room_ids = []
+message_since = "2020-01-01T00:00:00Z"
+message_before = "2026-01-01T00:00:00Z"
+
+[target]
+kind = "telegram"
+auth = "mtproto"
+api_id = "env:TELEGRAM_API_ID"
+api_hash = "env:TELEGRAM_API_HASH"
+session = ".secrets/telegram.session"
+destination = "prompt"
+import_mode = "history_import" # history_import | replay

@@ -1,0 +1,28 @@
+name = "webex-to-telegram-organization"
+mode = "organization"
+workspace = ".exodus/webex-to-telegram-organization"
+runtime = "local"
+
+[source]
+kind = "webex"
+auth = "env:WEBEX_COMPLIANCE_ACCESS_TOKEN"
+scope = "organization"
+max_page_size = 100
+message_since = "2020-01-01T00:00:00Z"
+message_before = "2026-01-01T00:00:00Z"
+
+[target]
+kind = "telegram"
+auth = "mtproto"
+api_id = "env:TELEGRAM_API_ID"
+api_hash = "env:TELEGRAM_API_HASH"
+session = ".secrets/telegram.session"
+destination = "mapping_file"
+import_mode = "history_import"
+
+[policy]
+legal_basis = "customer-approved migration"
+approved_by = "security@example.com"
+retention_start = "2020-01-01T00:00:00Z"
+retention_end = "2026-01-01T00:00:00Z"
+include_direct_messages = false

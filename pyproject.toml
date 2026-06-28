@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "exodus-agent"
+version = "0.1.0"
+description = "Local-first omni migration tooling for Webex chat history to Telegram and Teams."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+authors = [{ name = "Parcific" }]
+dependencies = []
+
+[project.optional-dependencies]
+telegram = ["telethon>=1.36,<2"]
+
+[project.scripts]
+exodus = "exodus_agent.cli:main"
+exodus-telegram-mtproto-runner = "exodus_agent.mtproto_runner:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["exodus_agent*"]
