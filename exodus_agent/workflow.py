@@ -269,8 +269,5 @@ def _telegram_import_completed(job_store: JobStore) -> bool:
 
 
 def _teams_import_completed(job_store: JobStore) -> bool:
-    return any(
-        event.get("kind") == JobEventKind.PHASE_COMPLETED.value
-        and event.get("phase") == "teams_import"
-        for event in job_store.read_events()
-    )
+    from .targets.teams_executor import _already_completed
+    return _already_completed(job_store.read_events())
