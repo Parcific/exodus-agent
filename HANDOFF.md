@@ -34,7 +34,8 @@ b44bf03  docs(quickstart): fix wrong JSON field names and python version check
 e702b40  docs(claude-md): update Commands section to exodus binary
 a52a3a3  fix(webex): correct grammar for singular attempt count in retry errors
 4e2e7be  refactor(webex): extract shared _request_with_backoff helper
-73aab2d  feat(teams): implement GraphTeamsAdapter with OAuth2 and retry logic  <- HEAD
+73aab2d  feat(teams): implement GraphTeamsAdapter with OAuth2 and retry logic
+792a491  fix(teams): url-encode graph api ids, guard oauth non-json, fix html double-wrap  <- HEAD
 ```
 
 ---
@@ -116,26 +117,7 @@ is incompatible with a batch CLI tool.
 
 ## In-Flight Work (must complete before bundling)
 
-### 1. Code-review findings (workflow w5ruqk5tv — running as of this handoff)
-
-A `/code-review high` workflow is running against the GraphTeamsAdapter diff. It will
-produce a task notification when done.
-
-**When notification arrives:**
-1. Read all findings from the workflow output
-2. RCA + clean fix every CONFIRMED or PLAUSIBLE finding (one commit per cluster)
-3. `python3.14 -m unittest discover -s tests` must stay green before each commit
-4. Push after each fix
-
-**Review focus areas** (per the review brief):
-- OAuth2 token cache correctness (thread-safety, expiry edge cases)
-- Retry loop edge cases (zero retries, all retries exhausted)
-- Message body HTML injection risk (Webex content injected into HTML body)
-- Error message info leakage (client_secret appearing in tracebacks)
-- URL building for special characters in chat/team IDs
-- CLI adapter wiring (SecretResolutionError path, lambda capture)
-
-### 2. Docker bundle (after all review findings are fixed)
+### 1. Docker bundle (no blockers remaining)
 
 ```bash
 ./scripts/bundle.sh
