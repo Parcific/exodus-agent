@@ -84,22 +84,22 @@ WEBEX_ACCESS_TOKEN=... exodus webex-telegram-dry-run \
   --destination-map destination-map.json
 exodus teams-identity-map-template \
   --config examples/webex-to-teams.example.toml
-python -m exodus_agent teams-conversation-map-template \
+exodus teams-conversation-map-template \
   --config examples/webex-to-teams.example.toml \
   --identity-map .exodus/webex-to-teams/archive/mappings/teams-identity-map.json
-python -m exodus_agent teams-import-plan \
+exodus teams-import-plan \
   --config examples/webex-to-teams.example.toml \
   --identity-map .exodus/webex-to-teams/archive/mappings/teams-identity-map.json \
   --conversation-map .exodus/webex-to-teams/archive/mappings/teams-conversation-map.json
-python -m exodus_agent teams-execute-plan \
+exodus teams-execute-plan \
   --config examples/webex-to-teams.example.toml
-python -m exodus_agent teams-verify-import \
+exodus teams-verify-import \
   --config examples/webex-to-teams.example.toml
-python -m exodus_agent teams-dry-run-workflow \
+exodus teams-dry-run-workflow \
   --config examples/webex-to-teams.example.toml \
   --identity-map .exodus/webex-to-teams/archive/mappings/teams-identity-map.json \
   --conversation-map .exodus/webex-to-teams/archive/mappings/teams-conversation-map.json
-WEBEX_ACCESS_TOKEN=... python -m exodus_agent webex-teams-dry-run \
+WEBEX_ACCESS_TOKEN=... exodus webex-teams-dry-run \
   --config examples/webex-to-teams.example.toml \
   --identity-map ./approved-teams-identity-map.json \
   --conversation-map ./approved-teams-conversation-map.json
