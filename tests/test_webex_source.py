@@ -692,7 +692,22 @@ class WebexSourceTests(unittest.TestCase):
         query = parse_qs(urlparse(transport.calls[0]).query)
 
         self.assertEqual([message.source_id for message in messages], ["inside"])
+        self.assertEqual(query["afterDate"], ["2026-01-01T00:00:00Z"])
         self.assertEqual(query["before"], ["2026-02-01T00:00:00Z"])
+
+    def test_message_since_sends_after_date_api_param(self) -> None:
+        transport = FakeWebexTransport()
+        transport.add("/messages", {"items": []})
+        source = WebexSource(
+            WebexClient("token", transport=transport, sleeper=lambda _: None),
+            message_since=datetime(2026, 3, 15, 12, 0, tzinfo=timezone.utc),
+        )
+
+        tuple(source.list_messages(type("Conversation", (), {"source_id": "room-1"})()))
+        query = parse_qs(urlparse(transport.calls[0]).query)
+
+        self.assertEqual(query["afterDate"], ["2026-03-15T12:00:00Z"])
+        self.assertNotIn("before", query)
 
     def test_next_link_parser_handles_missing_or_next_links(self) -> None:
         self.assertIsNone(_next_link({}))

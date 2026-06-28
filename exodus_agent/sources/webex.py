@@ -128,6 +128,7 @@ class WebexSource:
     message_before: datetime | None = None
     _conversation_cache: tuple[Conversation, ...] | None = field(default=None, init=False)
     _membership_payload_cache: tuple[dict[str, Any], ...] | None = field(default=None, init=False)
+    _excluded_root_ids_cache: dict[str, frozenset[str]] = field(default_factory=dict, init=False)
 
     def get_workspace(self) -> Workspace:
         me = self.client.get("/people/me")
@@ -169,21 +170,28 @@ class WebexSource:
 
     def list_messages(self, conversation: Conversation) -> Iterable[Message]:
         params: dict[str, object] = {"roomId": conversation.source_id, "max": self.max_page_size}
+        if self.message_since is not None:
+            params["afterDate"] = _format_webex_datetime(self.message_since)
         if self.message_before is not None:
             params["before"] = _format_webex_datetime(self.message_before)
-        messages = [
-            _message_from_webex(item, conversation.source_id)
-            for item in self.client.paged_items(
-                "/messages",
-                params,
-            )
-        ]
-        return tuple(
-            sorted(
-                (message for message in messages if _message_in_window(message, self.message_since, self.message_before)),
-                key=lambda message: message.created_at,
-            )
-        )
+        included: list[Message] = []
+        excluded_ids: set[str] = set()
+        for item in self.client.paged_items("/messages", params):
+            message = _message_from_webex(item, conversation.source_id)
+            if _message_in_window(message, self.message_since, self.message_before):
+                included.append(message)
+            else:
+                excluded_ids.add(message.source_id)
+        self._excluded_root_ids_cache[conversation.source_id] = frozenset(excluded_ids)
+        return tuple(sorted(included, key=lambda message: message.created_at))
+
+    def get_excluded_root_ids(self, conversation: Conversation) -> frozenset[str]:
+        """Return IDs of messages excluded by the time-window filter for this conversation.
+
+        Populated during list_messages; returns empty frozenset if list_messages has not
+        yet been called for this conversation.
+        """
+        return self._excluded_root_ids_cache.get(conversation.source_id, frozenset())
 
     def download_attachment(self, attachment: Attachment) -> bytes:
         url = attachment.metadata.get("url")
