@@ -1,137 +1,244 @@
-# Exodus Agent Handoff
+# Exodus Agent — Handoff (2026-06-29)
 
-Repository: `/Users/shijiawei/repos/exodus-agent`
+This document is the authoritative handoff for the next agent (Codex or Claude Code) picking up
+this codebase. Read it top to bottom before touching anything.
 
-## Current Goal
+---
 
-Implement Exodus Agent cleanly, keep doing regular code reviews, and when an issue is found, do RCA, apply a clean fix, add regression coverage, and verify.
+## Project Purpose
 
-The product goal is a local-first omni migration tool. Current implemented scope includes Webex archive export, Telegram staging/import planning, Teams identity/conversation mapping, Teams import planning/dry-run execution/verification, and workflow CLIs.
+Local-first deterministic ETL tool for migrating collaboration data between platforms.
+Primary scope: **Webex → Microsoft Teams** chat history. No cloud dependency; the operator
+runs this on their own machine, keeping tokens, exports, and logs under local control.
 
-## Current State
+Repo: `https://github.com/Parcific/exodus-agent`
+Language: Python 3.11+
+Test runner: `python3 -m unittest discover -s tests` (stdlib only, no pytest)
+Entry point: `exodus` CLI (installed via `pip install -e .`)
 
-All project files are currently untracked:
+---
 
-```text
-?? README.md
-?? docs/
-?? examples/
-?? exodus_agent/
-?? pyproject.toml
-?? tests/
+## Current State (post-session 2026-06-29)
+
+### Tests
+
+```
+Ran 414 tests in ~2s — ALL PASSING
 ```
 
-Important: because the files are untracked, `git diff` will not show edits. Inspect files directly.
+### Commits landed this session (oldest to newest, all on origin/main)
 
-## Immediate Blocker To Fix First
+```
+b44bf03  docs(quickstart): fix wrong JSON field names and python version check
+6634f60  docs(readme): complete Teams command migration to exodus binary
+e702b40  docs(claude-md): update Commands section to exodus binary
+a52a3a3  fix(webex): correct grammar for singular attempt count in retry errors
+4e2e7be  refactor(webex): extract shared _request_with_backoff helper
+73aab2d  feat(teams): implement GraphTeamsAdapter with OAuth2 and retry logic  <- HEAD
+```
 
-`exodus_agent/cli.py` currently has a syntax error introduced during an unfinished CLI robustness patch.
+---
 
-Command:
+## Architecture (what matters for next steps)
+
+### Data flow
+
+```
+Source (Webex) -> Archive (JSONL) -> Planner -> Import Plan -> Executor -> Verifier
+```
+
+### Key files for Teams migration
+
+| File | Role |
+|------|------|
+| `exodus_agent/targets/graph_teams_adapter.py` | NEW — live Graph API adapter |
+| `exodus_agent/targets/teams_executor.py` | Executes import plan; `TeamsMessageAdapter` Protocol; `DryRunTeamsAdapter` |
+| `exodus_agent/targets/teams_mapping.py` | Builds identity map, conversation map, import plan |
+| `exodus_agent/workflow.py` | High-level workflow orchestrators (both accept optional `adapter` param) |
+| `exodus_agent/cli.py` | CLI entry point; `_teams_adapter_from_config()` auto-selects adapter |
+| `tests/test_graph_teams_adapter.py` | NEW — 40 unit tests for GraphTeamsAdapter |
+
+### GraphTeamsAdapter (just shipped in commit 73aab2d)
+
+`exodus_agent/targets/graph_teams_adapter.py`
+
+**`_TokenCache`** — client-credentials OAuth2 token, refreshed transparently:
+- Fetches from `https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token`
+- Caches for the token lifetime minus 60 s margin
+- `invalidate()` forces refresh on next `get()` — called when Graph returns 401
+
+**`GraphTeamsAdapter`** — implements `TeamsMessageAdapter` Protocol:
+- `import_message(message)` returns `{"teams_message_id": "...", "graph_created_date_time": "..."}`
+- URL built from `target_kind`:
+  - `group_chat` / `one_on_one_chat` → `POST /chats/{chatId}/messages`
+  - `team_channel` → `POST /teams/{teamId}/channels/{channelId}/messages`
+- Embeds migration provenance in HTML body (original Webex timestamp) because `createdDateTime`
+  is read-only without `Teamwork.Migrate.All` app permission
+- Retries 429 (Retry-After header), re-fetches token on 401, raises `GraphApiError` on exhaustion
+- Injectable transports: `graph_transport` and `oauth_transport` kwargs for testing
+
+**Config-driven activation** (`_teams_adapter_from_config` in `cli.py`):
+- If `[target]` section has `tenant_id` + `client_id` + `client_secret` → `GraphTeamsAdapter`
+- Otherwise → `DryRunTeamsAdapter` (no network calls, returns fake IDs)
+- Both `teams-execute-plan` and `webex-teams-dry-run` print `Adapter: <ClassName>` at startup
+
+### TOML config for live Teams import
+
+```toml
+[target]
+kind = "teams"
+auth = "graph"
+tenant_id = "env:MICROSOFT_TENANT_ID"
+client_id = "env:MICROSOFT_CLIENT_ID"
+client_secret = "env:MICROSOFT_CLIENT_SECRET"
+```
+
+Required Azure AD app permissions:
+- `Chat.ReadWrite.All` — for group_chat / one_on_one_chat
+- `ChannelMessage.Send` — for team_channel
+
+### Why historical timestamps are not preserved
+
+Microsoft Graph only allows `createdDateTime` to be set with `Teamwork.Migrate.All` permission,
+which requires Teams migration mode (the channel/chat must be freshly created in migration mode).
+We target EXISTING chats/channels (user fills `chat_id`/`team_id`/`channel_id` in the
+conversation map), so migration mode cannot be used. The original timestamp is embedded as
+`<em>Originally sent: {original_created_at}</em>` in the HTML body instead.
+
+### Why messages appear from the app, not the original user
+
+`Chat.ReadWrite.All` app-only permission does not allow setting `from.user` to a specific
+Entra user — Azure AD controls that field and maps it to the registered application. To truly
+impersonate senders you would need delegated permissions per-user (interactive login), which
+is incompatible with a batch CLI tool.
+
+---
+
+## In-Flight Work (must complete before bundling)
+
+### 1. Code-review findings (workflow w5ruqk5tv — running as of this handoff)
+
+A `/code-review high` workflow is running against the GraphTeamsAdapter diff. It will
+produce a task notification when done.
+
+**When notification arrives:**
+1. Read all findings from the workflow output
+2. RCA + clean fix every CONFIRMED or PLAUSIBLE finding (one commit per cluster)
+3. `python3.14 -m unittest discover -s tests` must stay green before each commit
+4. Push after each fix
+
+**Review focus areas** (per the review brief):
+- OAuth2 token cache correctness (thread-safety, expiry edge cases)
+- Retry loop edge cases (zero retries, all retries exhausted)
+- Message body HTML injection risk (Webex content injected into HTML body)
+- Error message info leakage (client_secret appearing in tracebacks)
+- URL building for special characters in chat/team IDs
+- CLI adapter wiring (SecretResolutionError path, lambda capture)
+
+### 2. Docker bundle (after all review findings are fixed)
 
 ```bash
-python3 -m py_compile exodus_agent/cli.py
+./scripts/bundle.sh
+# Output: dist/exodus-agent-docker.tar.gz + dist/TRANSFER.md
 ```
 
-Current failure:
+`Dockerfile` and `scripts/bundle.sh` are already committed. The Dockerfile uses
+`python:3.13-slim`, non-root `exodus` user, `/workspace` volume, `ENTRYPOINT ["exodus"]`.
 
-```text
-File "exodus_agent/cli.py", line 723
-  result = _run_cli_action(
-                          ^
-SyntaxError: '(' was never closed
-```
+Air-gap transfer: `docker save -> gzip -> USB -> docker load` on target machine.
 
-Likely fix: close the `_run_cli_action(...)` call in the `webex-teams-dry-run` branch after the `lambda: run_webex_to_teams_dry_run_workflow(...)` call. Inspect around lines 707-739.
+---
 
-## Unverified Edit In Progress
+## End-to-End Live Test Steps (for founder after bundle ships)
 
-The unfinished patch added a CLI helper:
-
-```python
-T = TypeVar("T")
-
-def _run_cli_action(action: Callable[[], T]) -> T:
-    try:
-        return action()
-    except (FileExistsError, ValueError) as exc:
-        raise SystemExit(str(exc)) from exc
-```
-
-and wrapped direct Telegram/Teams/workflow operation calls with it.
-
-RCA: lower layers correctly raise `ValueError` or `FileExistsError` for validation failures such as stale paths, invalid archive/package state, or refused overwrites, but several CLI commands invoked those functions directly. That can leak raw tracebacks instead of clean CLI exits.
-
-Clean intent: keep validation in lower layers; normalize expected validation/output conflicts at the CLI boundary.
-
-## Add Regression Coverage
-
-After fixing syntax, add a CLI-level regression test in `tests/test_cli.py`:
-
-- Create a minimal Telegram config.
-- Create a minimal archive/package.
-- Create `package_root / "import-plan.json"` as a directory.
-- Run `main(["telegram-import-plan", "--config", ..., "--package", ..., "--destination-map", ...])`.
-- Assert it raises `SystemExit` matching `import plan output path must be a file`, not raw `ValueError`.
-
-There is already lower-layer coverage in `tests/test_telegram_target.py`:
-
-```python
-test_import_plan_rejects_directory_output_path
-```
-
-The new test should prove the CLI boundary behavior.
-
-## Verification Commands
-
-Run these after the syntax fix and test addition:
+Prerequisites on test PC:
+- Docker with loaded image
+- Env vars: `WEBEX_ACCESS_TOKEN`, `MICROSOFT_TENANT_ID`, `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`
 
 ```bash
-python3 -m unittest tests.test_cli
-python3 -m compileall exodus_agent tests
-python3 -m unittest discover -s tests
-python3 -m exodus_agent plan --config examples/webex-to-teams.example.toml
-find . -type d \( -name __pycache__ -o -name .exodus \) -prune -print
+# 1. Validate config
+docker run --rm -e WEBEX_ACCESS_TOKEN=... \
+  -v $(pwd):/workspace exodus-agent \
+  doctor --config /workspace/migration.toml
+
+# 2. Extract Webex history
+docker run --rm -e WEBEX_ACCESS_TOKEN=... \
+  -v $(pwd):/workspace exodus-agent \
+  export-dry-run --config /workspace/migration.toml
+
+# 3. Identity map template (one entry per Webex user)
+docker run --rm -v $(pwd):/workspace exodus-agent \
+  teams-identity-map-template \
+  --config /workspace/migration.toml \
+  --output /workspace/identity-map.json
+# -> Fill in entra_user_id for each participant
+
+# 4. Conversation map template (one entry per Webex room)
+docker run --rm -v $(pwd):/workspace exodus-agent \
+  teams-conversation-map-template \
+  --config /workspace/migration.toml \
+  --identity-map /workspace/identity-map.json \
+  --output /workspace/conversation-map.json
+# -> Fill in chat_id (group/1:1) or team_id+channel_id for each room
+
+# 5. Generate import plan
+docker run --rm -v $(pwd):/workspace exodus-agent \
+  teams-import-plan \
+  --config /workspace/migration.toml \
+  --identity-map /workspace/identity-map.json \
+  --conversation-map /workspace/conversation-map.json
+
+# 6. Live import (GraphTeamsAdapter fires when creds present)
+docker run --rm \
+  -e MICROSOFT_TENANT_ID=... \
+  -e MICROSOFT_CLIENT_ID=... \
+  -e MICROSOFT_CLIENT_SECRET=... \
+  -v $(pwd):/workspace exodus-agent \
+  teams-execute-plan --config /workspace/migration.toml
+# Prints: Adapter: GraphTeamsAdapter
+
+# 7. Verify
+docker run --rm -v $(pwd):/workspace exodus-agent \
+  teams-verify-import --config /workspace/migration.toml
 ```
 
-Then remove generated artifacts:
+---
+
+## Test Commands
 
 ```bash
-rm -rf tests/__pycache__ exodus_agent/__pycache__ exodus_agent/sources/__pycache__ exodus_agent/targets/__pycache__
-find . -type d \( -name __pycache__ -o -name .exodus \) -prune -print
-git status --short
+# Full suite (414 tests expected)
+/opt/homebrew/bin/python3.14 -m unittest discover -s tests
+
+# Specific files
+/opt/homebrew/bin/python3.14 -m unittest tests.test_graph_teams_adapter
+/opt/homebrew/bin/python3.14 -m unittest tests.test_cli
+/opt/homebrew/bin/python3.14 -m unittest tests.test_teams_executor
+
+# Syntax check
+/opt/homebrew/bin/python3.14 -m compileall exodus_agent tests
 ```
 
-## Last Known Fully Verified State
+---
 
-Before the unfinished CLI helper edit, these passed:
+## Hard Constraints (do not violate)
 
-```bash
-python3 -m unittest tests.test_telegram_target
-python3 -m compileall exodus_agent tests
-python3 -m unittest discover -s tests
-python3 -m exodus_agent plan --config examples/webex-to-teams.example.toml
-```
+- No `git add -A` or `git add .` — stage files specifically
+- No `Co-Authored-By` footer in commit messages
+- No `--no-verify` flag
+- One WP per commit; push after each
+- Do not commit `dist/` artifacts (already in `.gitignore`)
+- Do not bundle before code-review findings are fixed
 
-Full suite count at that time: 351 tests.
+---
 
-## Timestamp Design Note
+## Open Questions (surface to founder after review + bundle)
 
-Teams import plans preserve original source timestamps in audit fields.
-
-For Teams replies, if the source reply timestamp is equal to or earlier than the parent message timestamp, the imported `createdDateTime` is shifted to parent + 1 ms to satisfy Teams import ordering. The original source timestamp remains in `original_created_at`, with `timestamp_adjusted`, `timestamp_adjustment_ms`, and `timestamp_adjustment_reason` audit fields.
-
-Telegram package/import plans preserve source timestamps in the staged transcript/plan. Final display behavior depends on Telegram import/API behavior.
-
-## Suggested Start Prompt For Claude Code
-
-```text
-You are continuing in /Users/shijiawei/repos/exodus-agent. Read HANDOFF.md first and treat the current filesystem as authoritative. The immediate blocker is a syntax error in exodus_agent/cli.py from an unfinished _run_cli_action wrapper around webex-teams-dry-run. Fix that first, add the CLI regression test described in HANDOFF.md, then run:
-
-python3 -m unittest tests.test_cli
-python3 -m compileall exodus_agent tests
-python3 -m unittest discover -s tests
-python3 -m exodus_agent plan --config examples/webex-to-teams.example.toml
-
-Afterward clean __pycache__/.exodus artifacts and report RCA, fix, tests, and any remaining risks. Do not revert unrelated work. Use the existing code style and keep changes scoped.
-```
+1. **Message attribution**: messages appear from the registered app identity in Teams.
+   Should the original Webex author name also be embedded in the HTML body?
+   (Currently only timestamp is shown.)
+2. **Attachment upload**: `supported=False` attachments are tracked but not uploaded.
+   Graph API `driveItem` upload is the natural next WP after the live test passes.
+3. **Reply threading**: `parent_source_message_id` is tracked in the plan but the Graph POST
+   does not set `replyToId` — replies land flat. `team_channel` supports reply threading via
+   `replyToId`; `group_chat` does not. Worth adding for channel targets.
