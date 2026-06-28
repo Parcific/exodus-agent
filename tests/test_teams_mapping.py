@@ -22,6 +22,7 @@ from exodus_agent.targets.teams_mapping import (
     write_teams_identity_map_template,
     write_teams_import_plan,
     write_teams_mapping_template,
+    _ordered_messages_for_import,
 )
 
 
@@ -1868,6 +1869,27 @@ class TeamsMappingTests(unittest.TestCase):
             self.assertEqual(payload["messages"][0]["attachments"][0]["source_attachment_id"], "file-1")
             self.assertEqual(payload["unsupported_attachments"][0]["source_message_id"], "msg-1")
             self.assertEqual(payload["unsupported_attachments"][0]["source_attachment_id"], "file-1")
+
+    def test_ordered_messages_for_import_deep_chain_does_not_recurse(self) -> None:
+        # Regression test: a chain deeper than Python's default recursion limit (~1000)
+        # must not raise RecursionError.  The iterative DFS implementation handles this.
+        depth = 1200
+        base = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+        messages = [
+            Message(
+                source_id=f"msg-{i}",
+                conversation_id="conv-1",
+                author_id="u1",
+                created_at=base + timedelta(seconds=i),
+                parent_id=f"msg-{i - 1}" if i > 1 else None,
+                text=f"message {i}",
+            )
+            for i in range(1, depth + 1)
+        ]
+        result = _ordered_messages_for_import(messages, conversation_id="conv-1")
+        self.assertEqual(len(result), depth)
+        for position, msg in enumerate(result):
+            self.assertEqual(msg.source_id, f"msg-{position + 1}")
 
 
 def _archive_with_conversation(
