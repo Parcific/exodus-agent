@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Callable, TypeVar
 
 from .archive import Archive
-from .config import load_config
+from .config import MigrationConfig, load_config
 from .secrets import SecretResolutionError, resolve_secret
 from .job import JobStore, validate_job_id
 from .planner import build_plan
@@ -21,7 +21,12 @@ from .targets.telegram import (
     write_telegram_staging_package,
 )
 from .targets.telegram_executor import SubprocessTelegramAdapter, execute_import_plan
-from .targets.teams_executor import execute_teams_import_plan, verify_teams_import
+from .targets.teams_executor import (
+    DryRunTeamsAdapter,
+    TeamsMessageAdapter,
+    execute_teams_import_plan,
+    verify_teams_import,
+)
 from .targets.teams_mapping import (
     build_teams_identity_prefill_from_entra,
     load_teams_conversation_map,
@@ -609,12 +614,16 @@ def main(argv: list[str] | None = None) -> None:
         message_map_path = args.message_map or (
             config.workspace / "archive" / "mappings" / "teams-message-map.json"
         )
+        adapter = _run_cli_action(lambda: _teams_adapter_from_config(config))
+        adapter_name = type(adapter).__name__
+        print(f"Adapter: {adapter_name}")
         result = _run_cli_action(
-            lambda: execute_teams_import_plan(
+            lambda _a=adapter: execute_teams_import_plan(
                 plan_path=plan_path,
                 message_map_path=message_map_path,
                 job_store=_job_store(config.workspace, args.job_id),
                 job_id=args.job_id,
+                adapter=_a,
             )
         )
         print(f"Execution: {'OK' if result.ok else 'FAILED'}")
@@ -728,8 +737,10 @@ def main(argv: list[str] | None = None) -> None:
         report_path = args.report or (
             config.workspace / "archive" / "reports" / "teams-import-verification.json"
         )
+        adapter = _run_cli_action(lambda: _teams_adapter_from_config(config))
+        print(f"Adapter: {type(adapter).__name__}")
         result = _run_cli_action(
-            lambda: run_webex_to_teams_dry_run_workflow(
+            lambda _a=adapter: run_webex_to_teams_dry_run_workflow(
                 source=webex_source_from_config(config.source),
                 archive=Archive(config.workspace / "archive"),
                 conversation_map=conversation_map,
@@ -743,6 +754,7 @@ def main(argv: list[str] | None = None) -> None:
                 teams_job_id=f"{args.job_id}-teams",
                 name=config.name,
                 overwrite_import_plan=args.overwrite_plan,
+                adapter=_a,
             )
         )
         print(f"Workflow: {'OK' if result.ok else 'FAILED'}")
@@ -817,6 +829,27 @@ def _load_destination_map(path: Path | None) -> dict[str, str]:
             raise SystemExit("Destination map entries must include non-empty Telegram peers")
         destination_map[source_conversation_id] = peer
     return destination_map
+
+
+def _teams_adapter_from_config(config: MigrationConfig) -> TeamsMessageAdapter:
+    """Build GraphTeamsAdapter if Graph credentials are present in config; else dry-run."""
+    settings = config.target.settings
+    tenant_id = settings.get("tenant_id")
+    client_id = settings.get("client_id")
+    raw_secret = settings.get("client_secret")
+    if (
+        isinstance(tenant_id, str) and tenant_id.strip()
+        and isinstance(client_id, str) and client_id.strip()
+        and isinstance(raw_secret, str) and raw_secret.strip()
+    ):
+        from .targets.graph_teams_adapter import GraphTeamsAdapter
+        secret = resolve_secret(raw_secret, field_name="target.client_secret")
+        return GraphTeamsAdapter(
+            tenant_id=tenant_id.strip(),
+            client_id=client_id.strip(),
+            client_secret=secret.reveal(),
+        )
+    return DryRunTeamsAdapter()
 
 
 def _run_cli_action(action: Callable[[], T]) -> T:

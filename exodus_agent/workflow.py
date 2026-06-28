@@ -18,6 +18,7 @@ from .targets.telegram import (
 from .targets.telegram_executor import TelegramPlanExecutionResult, execute_import_plan
 from .targets.teams_executor import (
     TeamsImportVerificationResult,
+    TeamsMessageAdapter,
     TeamsPlanExecutionResult,
     execute_teams_import_plan,
     verify_teams_import,
@@ -129,6 +130,7 @@ def run_webex_to_teams_dry_run_workflow(
     teams_job_id: str,
     name: str,
     overwrite_import_plan: bool = False,
+    adapter: TeamsMessageAdapter | None = None,
 ) -> WebexTeamsDryRunWorkflowResult:
     _preflight_webex_to_teams_outputs(
         import_plan_path=import_plan_path,
@@ -156,6 +158,7 @@ def run_webex_to_teams_dry_run_workflow(
         job_store=teams_job_store,
         job_id=teams_job_id,
         overwrite_import_plan=overwrite_import_plan,
+        adapter=adapter,
     )
     return WebexTeamsDryRunWorkflowResult(export=export, teams=teams)
 
@@ -225,6 +228,7 @@ def run_teams_dry_run_workflow(
     job_store: JobStore,
     job_id: str,
     overwrite_import_plan: bool = False,
+    adapter: TeamsMessageAdapter | None = None,
 ) -> TeamsDryRunWorkflowResult:
     if _teams_import_completed(job_store):
         raise FileExistsError(f"Teams dry-run workflow already completed for job: {job_id}")
@@ -240,6 +244,7 @@ def run_teams_dry_run_workflow(
         message_map_path=message_map_path,
         job_store=job_store,
         job_id=job_id,
+        adapter=adapter,
     )
     verification = None
     if execution.ok:

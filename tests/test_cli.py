@@ -725,18 +725,19 @@ kind = "teams"
 
             # webex_source_from_config is called INSIDE the lambda passed to _run_cli_action,
             # so SecretResolutionError must be caught there and converted to SystemExit.
-            with self.assertRaises(SystemExit):
-                main(
-                    [
-                        "webex-teams-dry-run",
-                        "--config",
-                        str(config_path),
-                        "--identity-map",
-                        str(identity_path),
-                        "--conversation-map",
-                        str(conversation_path),
-                    ]
-                )
+            with patch("builtins.print"):
+                with self.assertRaises(SystemExit):
+                    main(
+                        [
+                            "webex-teams-dry-run",
+                            "--config",
+                            str(config_path),
+                            "--identity-map",
+                            str(identity_path),
+                            "--conversation-map",
+                            str(conversation_path),
+                        ]
+                    )
 
     def test_export_dry_run_duplicate_job_id_raises_system_exit(self) -> None:
         """BUG 2: export-dry-run re-run with the same job-id raises SystemExit, not raw FileExistsError."""
