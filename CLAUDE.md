@@ -16,8 +16,8 @@ pip install -e .
 pip install -e ".[telegram]"
 
 # Run CLI
-python -m exodus_agent --help
-python -m exodus_agent plan --config examples/webex-to-telegram.example.toml
+exodus --help
+exodus plan --config examples/webex-to-telegram.example.toml
 
 # Run all tests
 python3 -m unittest discover -s tests
