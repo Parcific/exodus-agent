@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from exodus_agent.job import JobStore
 from exodus_agent.targets.teams_executor import execute_teams_import_plan, verify_teams_import
@@ -1215,6 +1216,45 @@ class TeamsExecutorTests(unittest.TestCase):
             self.assertFalse(result.ok)
             self.assertIn("not valid UTF-8", "\n".join(result.issues))
             self.assertEqual(report["ok"], False)
+
+    def test_message_map_flush_cadence_is_batched_not_per_message(self) -> None:
+        """_write_message_map must be called ceil(N/100)+1 times for N messages,
+        not N times. With 250 messages: flush at 100, flush at 200, flush after
+        loop (250) = 3 calls total."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            n = 250
+            messages = [_message(f"msg-{i}", i) for i in range(n)]
+            plan_path = root / "teams-import-plan.json"
+            plan_path.write_text(
+                json.dumps({"format": "exodus.teams.import_plan.v1", "messages": messages}),
+                encoding="utf-8",
+            )
+            message_map_path = root / "teams-message-map.json"
+            store = JobStore(root / "jobs" / "job-flush")
+
+            write_call_count = 0
+            real_write_text = Path.write_text
+
+            def counting_write_text(self: Path, *args: object, **kwargs: object) -> None:
+                nonlocal write_call_count
+                if self == message_map_path:
+                    write_call_count += 1
+                real_write_text(self, *args, **kwargs)  # type: ignore[arg-type]
+
+            with patch.object(Path, "write_text", counting_write_text):
+                result = execute_teams_import_plan(
+                    plan_path=plan_path,
+                    message_map_path=message_map_path,
+                    job_store=store,
+                    job_id="job-flush",
+                )
+
+            self.assertTrue(result.ok)
+            self.assertEqual(result.messages_imported, n)
+            # Expect exactly 3 writes: at 100, at 200, and once after the loop
+            # (the final partial batch of 50 via the _map_dirty guard).
+            self.assertEqual(write_call_count, 3)
 
 
 def _write_plan(root: Path) -> Path:
