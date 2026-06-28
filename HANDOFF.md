@@ -35,8 +35,14 @@ e702b40  docs(claude-md): update Commands section to exodus binary
 a52a3a3  fix(webex): correct grammar for singular attempt count in retry errors
 4e2e7be  refactor(webex): extract shared _request_with_backoff helper
 73aab2d  feat(teams): implement GraphTeamsAdapter with OAuth2 and retry logic
-792a491  fix(teams): url-encode graph api ids, guard oauth non-json, fix html double-wrap  <- HEAD
+792a491  fix(teams): url-encode graph api ids, guard oauth non-json, fix html double-wrap
+52bf3e8  fix(teams): handle URLError retries, html injection, 401 exhaustion, retry-after zero
+5011302  fix(cli): wire adapter to teams-dry-run-workflow, resolve all graph creds, error on partial
+bd92e1b  refactor(workflow): eliminate duplicate teams import completion predicate  <- HEAD
 ```
+
+Code-review workflow w5ruqk5tv found 10 confirmed bugs; all 10 are fixed and pushed.
+428 tests — all green.
 
 ---
 
