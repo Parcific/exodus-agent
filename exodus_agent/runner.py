@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from .archive import Archive
 from .job import JobEvent, JobEventKind, JobStore
 from .model import Attachment, Message
-from .protocols import DiscoverySource, MediaSource, MembershipSource, MessageSource
+from .protocols import ClipAwareMessageSource, DiscoverySource, MediaSource, MembershipSource, MessageSource
 
 
 @dataclass(frozen=True)
@@ -54,10 +54,16 @@ def export_dry_run(
     message_source_ids: set[str] = set()
     for conversation in conversations:
         messages = tuple(_materialize_attachments(archive, source, source.list_messages(conversation)))
+        excluded_root_ids = (
+            source.get_excluded_root_ids(conversation)
+            if isinstance(source, ClipAwareMessageSource)
+            else frozenset()
+        )
         _validate_export_messages(
             conversation_id=conversation.source_id,
             messages=messages,
             message_source_ids=message_source_ids,
+            excluded_root_ids=excluded_root_ids,
         )
         message_count += len(messages)
         attachment_count += sum(len(message.attachments) for message in messages)
@@ -165,6 +171,7 @@ def _validate_export_messages(
     conversation_id: str,
     messages: tuple[Message, ...],
     message_source_ids: set[str],
+    excluded_root_ids: frozenset[str] = frozenset(),
 ) -> None:
     conversation_message_ids = {message.source_id for message in messages}
     for message in messages:
@@ -187,10 +194,14 @@ def _validate_export_messages(
         if message.parent_id == message.source_id:
             raise ValueError(f"Export message references itself as parent_id: {message.source_id}")
         if message.parent_id is not None and message.parent_id not in conversation_message_ids:
-            raise ValueError(
-                "Export message references unknown parent_id in conversation: "
-                f"{message.source_id} -> {message.parent_id}"
-            )
+            if message.parent_id not in excluded_root_ids:
+                raise ValueError(
+                    "Export message references unknown parent_id in conversation: "
+                    f"{message.source_id} -> {message.parent_id}"
+                )
+            # parent_id predates the message_since window: thread root was clipped.
+            # The reply is still valid and included in the archive; the dangling
+            # parent_id is expected and not an error.
         message_source_ids.add(message.source_id)
 
 

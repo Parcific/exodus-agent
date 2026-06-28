@@ -161,6 +161,43 @@ class FakeSourceWithMissingMessageParent(FakeSource):
         )
 
 
+class FakeSourceWithClippedThreadRoot:
+    """Simulates a source where message_since clips the thread root but not the reply.
+
+    The root message (root-msg) predates message_since and is excluded from the
+    returned list. The reply still references root-msg as its parent_id.  This
+    mirrors exactly what WebexSource does when message_since is set and the thread
+    root falls before the window.
+    """
+
+    _EXCLUDED_ROOT_ID = "root-msg"
+
+    def get_workspace(self) -> Workspace:
+        return Workspace(source_id="workspace-1", source_kind="fake", display_name="Fake")
+
+    def list_conversations(self) -> tuple[Conversation, ...]:
+        return (Conversation(source_id="room/1", kind=ConversationKind.SPACE, title="Room"),)
+
+    def list_participants(self) -> tuple[Participant, ...]:
+        return (Participant(source_id="user-1", display_name="Ada"),)
+
+    def list_messages(self, conversation: Conversation) -> tuple[Message, ...]:
+        # Only the reply is returned; the root was clipped by message_since.
+        return (
+            Message(
+                source_id="reply-1",
+                conversation_id=conversation.source_id,
+                author_id="user-1",
+                created_at=datetime(2026, 6, 2, tzinfo=timezone.utc),
+                parent_id=self._EXCLUDED_ROOT_ID,
+                text="reply to clipped root",
+            ),
+        )
+
+    def get_excluded_root_ids(self, conversation: Conversation) -> frozenset[str]:
+        return frozenset({self._EXCLUDED_ROOT_ID})
+
+
 class FakeSourceWithSelfParentMessage(FakeSource):
     def list_messages(self, conversation: Conversation) -> tuple[Message, ...]:
         return (
@@ -424,6 +461,32 @@ class RunnerTests(unittest.TestCase):
                     target_kind="telegram",
                     name="demo",
                 )
+
+    def test_export_succeeds_when_message_since_clips_thread_root(self) -> None:
+        """Export must complete without ValueError when the parent of a reply was excluded
+        by message_since (i.e. the thread root predates the export window).
+        The reply itself must still appear in the written archive.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            archive = Archive(root / "archive")
+            job_store = JobStore(root / "jobs" / "job-1")
+
+            result = export_dry_run(
+                job_id="job-1",
+                archive=archive,
+                job_store=job_store,
+                source=FakeSourceWithClippedThreadRoot(),
+                source_kind="fake",
+                target_kind="telegram",
+                name="demo",
+            )
+
+            self.assertEqual(result.messages, 1)
+            messages = archive.read_messages("room/1")
+            self.assertEqual(len(messages), 1)
+            self.assertEqual(messages[0].source_id, "reply-1")
+            self.assertEqual(messages[0].parent_id, FakeSourceWithClippedThreadRoot._EXCLUDED_ROOT_ID)
 
     def test_export_rejects_message_with_unknown_parent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
