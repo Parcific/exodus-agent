@@ -88,6 +88,45 @@ chmod +x ./exodus        # Linux/macOS only
 WEBEX_ACCESS_TOKEN=... ./exodus doctor --config migration.toml
 ```
 
+## Windows — install from source (no Docker, no binary)
+
+Use this when Docker Desktop is not available on the target Windows machine.
+Requires **Python 3.11 or later** (download from python.org — check "Add to PATH").
+
+Transfer the repo source to the Windows machine (zip it or copy the folder via USB),
+then open **Command Prompt** or **PowerShell** in the repo root:
+
+```powershell
+# 1. Verify Python version (must be 3.11+)
+python --version
+
+# 2. Create and activate a virtual environment (keeps the install isolated)
+python -m venv .venv
+.venv\Scripts\activate
+
+# 3. Install exodus-agent and its dependencies
+pip install -e .
+
+# 4. Verify the CLI is available
+exodus --help
+
+# 5. Set secrets as environment variables (PowerShell syntax)
+$env:WEBEX_ACCESS_TOKEN      = "your-webex-token"
+$env:MICROSOFT_TENANT_ID     = "your-tenant-id"
+$env:MICROSOFT_CLIENT_ID     = "your-client-id"
+$env:MICROSOFT_CLIENT_SECRET = "your-client-secret"
+
+# 6. Run the migration (same commands as Docker, without the docker run wrapper)
+exodus webex-teams-dry-run `
+  --config migration.toml `
+  --identity-map identity-map.json `
+  --conversation-map conversation-map.json
+```
+
+**Note:** The virtual environment must be activated (`.venv\Scripts\activate`) each time
+you open a new terminal before running `exodus`. All workspace files are written to the
+`workspace` path in your `migration.toml`, defaulting to `.exodus/` in the current folder.
+
 ## Quick-start for Webex → Teams dry-run
 
 See `docs/quickstart-webex-to-teams.md` in the repo for the full walkthrough.

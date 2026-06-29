@@ -50,6 +50,43 @@ examples/
 For a step-by-step Webex → Teams migration test see
 [docs/quickstart-webex-to-teams.md](docs/quickstart-webex-to-teams.md).
 
+## Installation
+
+### macOS / Linux
+
+```bash
+pip install -e .
+exodus --help
+```
+
+### Windows (no Docker)
+
+Requires Python 3.11+ from [python.org](https://www.python.org/downloads/) with "Add to PATH" checked.
+
+```powershell
+python -m venv .venv
+.venv\Scripts\activate
+pip install -e .
+exodus --help
+```
+
+Activate the virtual environment (`.venv\Scripts\activate`) each time you open a new terminal.
+
+### Air-gap / offline transfer
+
+If the target machine has no internet access, build a Docker image on a connected machine
+and transfer it via USB:
+
+```bash
+# On the internet-connected build machine (macOS or Linux with Docker):
+./scripts/bundle.sh
+# → dist/exodus-agent-docker.tar.gz  (load with: docker load < exodus-agent-docker.tar.gz)
+# → dist/TRANSFER.md                 (step-by-step for the target machine)
+```
+
+On **Windows without Docker**: zip the repo source, copy to the target via USB, then follow
+the Windows install steps above. Python 3.11+ must already be on the target machine.
+
 ## Early CLI
 
 After `pip install -e .` the `exodus` binary is on your PATH.
