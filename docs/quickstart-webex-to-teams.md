@@ -1,49 +1,58 @@
 # Quickstart: Webex → Microsoft Teams migration
 
-End-to-end guide for running a dry-run migration test from Cisco Webex to
-Microsoft Teams. Real Webex data is extracted and a complete Graph-format import
-plan is produced. Teams execution is dry-run (no live Graph API calls) until a
-live Graph adapter is wired in.
+Move your Cisco Webex chat history — conversations, messages, and participants —
+into Microsoft Teams. This guide walks you through every step from setup to
+verification, with both a **dry-run** mode (nothing is sent to Teams, safe to
+test any time) and a **live** mode (messages are actually posted to Teams).
+
+> **Safe to use at any point.** The tool only reads from Webex and only adds
+> messages to Teams. It never deletes, edits, or modifies any existing data.
+> If it fails or is interrupted mid-run, re-run with the same `--job-id` to
+> resume exactly where it left off. Nothing is left in a corrupt state.
 
 ---
 
-## What this covers
+## Before you start
 
-| Phase | What happens | Network calls |
-|-------|-------------|---------------|
-| Extract | Pull conversations, memberships, messages, attachments from Webex API → local archive | Webex REST API |
-| Identity map | Generate a JSON template mapping Webex user IDs → Entra UPNs; you fill in the UPNs | None |
-| Conversation map | Generate a JSON template mapping Webex rooms → Teams targets; you fill in targets | None |
-| Import plan | Prepare all messages in Graph external-import format with deduplicated timestamps | None |
-| Execute (dry-run) | Assign synthetic `dry-run:<source-id>` message IDs; write message map | None |
-| Verify | Audit that every planned message has a message-map entry | None |
+You will need:
 
-A live Teams import requires a `GraphTeamsAdapter` implementation (not yet built).
-The dry-run end-to-end is the validation step before that adapter is added.
+| What | Where to get it | Required for |
+|------|----------------|-------------|
+| **Webex personal access token** | [developer.webex.com](https://developer.webex.com/docs/getting-started) → click "Copy" under your name | Extract step |
+| **Microsoft Azure app credentials** (3 values: tenant ID, client ID, client secret) | Azure portal → App registrations | Live Teams posting only |
+| **Python 3.11 or later** | [python.org/downloads](https://www.python.org/downloads/) | Always |
+
+The Webex token expires after 12 hours. For longer migrations, create a **bot token** or use OAuth — both are explained at developer.webex.com.
+
+You can run the full dry-run (Steps 1–7) with only the Webex token. You only need the Azure credentials if you want to actually post messages into Teams (Step 6 Live).
 
 ---
 
-## Prerequisites
+## Install the tool
 
+**macOS / Linux** — open Terminal:
 ```bash
-# Python 3.11+ required
-python3 --version   # must print 3.11, 3.12, 3.13, or later
-
-# Install the package
 pip install -e .
-
-# Verify the CLI works
-exodus --version
+exodus --version   # should print 0.1.0
 ```
 
+**Windows** — open PowerShell:
+```powershell
+python -m venv .venv
+.venv\Scripts\activate
+pip install -e .
+exodus --version   # should print 0.1.0
+```
+
+Run `.venv\Scripts\activate` each time you open a new PowerShell window before using `exodus`.
+
 ---
 
-## Step 0 — Create your migration config
+## Step 1 — Create your config file
 
-Copy `examples/webex-to-teams.example.toml` to a working copy and edit it:
+Copy the example and save it as `migration.toml` in your working folder:
 
 ```toml
-# migration.toml
 name = "webex-to-teams"
 mode = "individual"
 workspace = ".exodus/webex-to-teams"
@@ -51,33 +60,40 @@ runtime = "local"
 
 [source]
 kind = "webex"
-auth = "env:WEBEX_ACCESS_TOKEN"     # personal access token from developer.webex.com
-scope = "user_rooms"                # "user_rooms" = all rooms visible to this token
-# scope = "selected_rooms"          # uncomment to target specific rooms only
-# room_ids = ["Y2lzY29...", "..."] # required when scope = "selected_rooms"
-# message_since = "2024-01-01T00:00:00Z"   # optional: lower bound on message date
-# message_before = "2025-01-01T00:00:00Z"  # optional: upper bound on message date
+auth = "env:WEBEX_ACCESS_TOKEN"
+scope = "user_rooms"
+# scope = "selected_rooms"          # uncomment to migrate specific rooms only
+# room_ids = ["Y2lzY29...", "..."] # paste room IDs here when using selected_rooms
+# message_since = "2024-01-01T00:00:00Z"   # optional: only messages after this date
+# message_before = "2025-01-01T00:00:00Z"  # optional: only messages before this date
 
 [target]
 kind = "teams"
-# The fields below are stored for future live-execution use.
-# They are not used during dry-run.
 auth = "graph"
 tenant_id = "env:MICROSOFT_TENANT_ID"
 client_id = "env:MICROSOFT_CLIENT_ID"
 client_secret = "env:MICROSOFT_CLIENT_SECRET"
-import_mode = "graph_migration"
 ```
 
-Get a Webex personal access token from <https://developer.webex.com/docs/getting-started>
-(lasts 12 hours; use a bot token or OAuth for longer sessions).
+The `env:` prefix means the value is read from an environment variable — your
+credentials never touch the config file itself.
 
 ---
 
-## Step 1 — Validate config and secrets
+## Step 2 — Validate your setup
 
+Set your Webex token and check that everything is wired correctly:
+
+**macOS / Linux:**
 ```bash
-WEBEX_ACCESS_TOKEN=<your-token> exodus doctor --config migration.toml
+export WEBEX_ACCESS_TOKEN="paste-your-token-here"
+exodus doctor --config migration.toml
+```
+
+**Windows (PowerShell):**
+```powershell
+$env:WEBEX_ACCESS_TOKEN = "paste-your-token-here"
+exodus doctor --config migration.toml
 ```
 
 Expected output:
@@ -90,31 +106,34 @@ Workspace: .exodus/webex-to-teams
 Secrets: OK
 ```
 
-`Secrets: FAILED` means your token or env var is wrong. Fix that before continuing.
+`Secrets: FAILED` means the token variable is not set or the name is mistyped. Fix it before continuing.
 
 ---
 
-## Step 2 — Extract Webex data
+## Step 3 — Extract your Webex data
 
+This downloads your conversations, messages, and attachments from Webex into a
+local archive. Nothing is sent to Teams yet.
+
+**macOS / Linux:**
 ```bash
-WEBEX_ACCESS_TOKEN=<your-token> exodus export-dry-run \
-  --config migration.toml \
-  --job-id pilot-export
+exodus export-dry-run --config migration.toml --job-id pilot-export
 ```
 
-This creates `.exodus/webex-to-teams/archive/` with:
-- `conversations/` — one JSONL file per Webex room
-- `participants.jsonl` — all unique participants (with emails where visible)
-- `memberships.jsonl` — per-room membership records
-- `messages/` — per-conversation message archives
-- `attachments/` — downloaded file metadata and content
+**Windows (PowerShell):**
+```powershell
+exodus export-dry-run --config migration.toml --job-id pilot-export
+```
 
-For a large workspace this may take a while (Webex paginates at 50 messages/page).
-The job is resumable — re-run with the same `--job-id` to continue after a failure.
+The archive is saved to `.exodus/webex-to-teams/archive/`. For large workspaces
+this may take several minutes — Webex returns 50 messages per page. If it
+stops for any reason, re-run the same command to resume.
 
 ---
 
-## Step 3 — Generate identity map template
+## Step 4 — Map Webex users to Teams users
+
+Generate a template that lists every Webex participant found in your archive:
 
 ```bash
 exodus teams-identity-map-template \
@@ -122,39 +141,35 @@ exodus teams-identity-map-template \
   --output identity-map.json
 ```
 
-This writes `identity-map.json` with one entry per Webex participant discovered
-in the archive. Each entry looks like:
+Open `identity-map.json` and fill in the `entra_user_id` field for each person.
+This is their **Microsoft 365 login email** (e.g. `alice@yourcompany.com`) — the
+same address they use to sign in to Teams.
 
 ```json
 {
-  "source_user_id": "Y2lzY29zcGFyazovL3VzL1BFT...",
+  "source_user_id": "Y2lzY29zcGFyazov...",
   "display_name": "Alice Chen",
   "email": "alice@company.webex.com",
-  "entra_user_id": ""
+  "entra_user_id": "alice@yourcompany.com"
 }
 ```
 
-**Fill in `entra_user_id`** with the user's UPN or object ID in your Azure AD /
-Entra ID tenant (usually the same as their Teams login email, e.g.
-`alice@company.com`). Leave blank or remove entries for participants who should
-not be mapped (their messages will fail validation).
-
-Optional shortcut — auto-prefill from an Entra user export:
-
-```bash
-# Export users from Entra ID: Azure Portal → Users → Download users (CSV)
-exodus teams-identity-map-template \
-  --config migration.toml \
-  --output identity-map.json \
-  --entra-users entra-users.csv
-```
-
-This matches Webex emails against Entra UPN / mail / proxyAddresses and
-pre-fills exact matches. Review entries marked with `needs_review` comments.
+**Shortcut — auto-fill from an Azure user export:**
+1. Open [Azure portal](https://portal.azure.com) → **Users** → **Download users** → choose CSV
+2. Run:
+   ```bash
+   exodus teams-identity-map-template \
+     --config migration.toml \
+     --output identity-map.json \
+     --entra-users entra-users.csv
+   ```
+   Matches are filled in automatically. Review entries marked `needs_review`.
 
 ---
 
-## Step 4 — Generate conversation map template
+## Step 5 — Map Webex rooms to Teams destinations
+
+Generate a template that lists every archived Webex room:
 
 ```bash
 exodus teams-conversation-map-template \
@@ -163,97 +178,139 @@ exodus teams-conversation-map-template \
   --output conversation-map.json
 ```
 
-This writes `conversation-map.json` with one entry per archived Webex room.
-Direct messages → suggested `one_on_one_chat`. Small groups (≤8 members) →
-`group_chat`. Larger groups → `team_channel` or `review_required`.
+Open `conversation-map.json`. For each room, fill in where in Teams the messages
+should land. There are two target types:
 
-Each entry:
-
+**Group chat or 1-on-1 chat** — fill in the Teams chat ID:
 ```json
 {
   "source_conversation_id": "Y2lzY29zcGFya...",
   "title": "Project Alpha",
   "target_kind": "group_chat",
   "target": {
-    "chat_id": "<Teams-chat-ID>"
+    "chat_id": "19:abc123@thread.v2"
   }
 }
 ```
 
-For `team_channel` targets, fill in:
-
+**Team channel** — fill in the team ID and channel ID:
 ```json
 {
   "target_kind": "team_channel",
   "target": {
-    "team_id": "<Teams-team-GUID>",
-    "channel_id": "<Teams-channel-GUID>"
+    "team_id": "00000000-1111-2222-3333-444444444444",
+    "channel_id": "19:abc@thread.skype"
   }
 }
 ```
 
-Find team/channel GUIDs in Teams Admin Center or via the Graph API:
-`GET https://graph.microsoft.com/v1.0/teams` and
-`GET https://graph.microsoft.com/v1.0/teams/{team-id}/channels`.
+**How to find chat IDs and channel IDs:**
+- **Chat ID**: Open the Teams web app, go to the chat, copy the ID from the URL
+  (`https://teams.microsoft.com/l/chat/<chat-id>/...`)
+- **Channel ID**: Open the channel → `...` menu → Get link to channel → the long
+  string after `/channel/` is the channel ID
+- Or ask your IT admin to export these from the Teams Admin Center
 
-Any room left as `review_required` blocks the import plan step — all entries
-must be resolved.
+Any room still set to `review_required` will block Step 6 — all rooms must be resolved.
 
 ---
 
-## Step 5 — Generate the import plan
+## Step 6 — Generate the import plan
+
+This prepares every message for posting to Teams:
 
 ```bash
 exodus teams-import-plan \
   --config migration.toml \
   --identity-map identity-map.json \
-  --conversation-map conversation-map.json \
-  --output .exodus/webex-to-teams/archive/plans/teams-import-plan.json
+  --conversation-map conversation-map.json
 ```
 
-This writes a JSON plan with every message prepared for Graph external import:
-- `createdDateTime` at millisecond precision (timestamps deduplicated — replies
-  shifted forward by 1 ms when collision occurs; capped at import_cutoff)
-- Full thread structure preserved (parents before replies)
-- `author_user_id` resolved to Entra ID
-- Attachment metadata included; unsupported types flagged
-
-The plan is human-readable and auditable before execution.
+The plan is saved as a readable JSON file you can inspect before executing.
+Thread structure, timestamps, and author IDs are all resolved at this stage.
 
 ---
 
-## Step 6 — Execute (dry-run)
+## Step 7 — Execute
+
+### Dry-run (safe — nothing is sent to Teams)
+
+Remove or leave empty the three `env:MICROSOFT_*` variables in your config,
+then run:
 
 ```bash
-exodus teams-execute-plan \
-  --config migration.toml \
-  --job-id pilot-teams
+exodus teams-execute-plan --config migration.toml --job-id pilot-teams
 ```
-
-This runs the plan through `DryRunTeamsAdapter`, which assigns
-`dry-run:<source-message-id>` as the Teams message ID for each message and
-writes the message map to
-`.exodus/webex-to-teams/archive/mappings/teams-message-map.json`.
 
 Expected output:
 ```
+Adapter: DryRunTeamsAdapter
 Execution: OK
 Message map: .exodus/webex-to-teams/archive/mappings/teams-message-map.json
 Messages: 1234/1234
 Skipped: 0
 ```
 
----
+`Adapter: DryRunTeamsAdapter` confirms no real API calls were made.
 
-## Step 7 — Verify
+### Live — actually post messages to Teams
 
+Set your Azure credentials, then run the same command:
+
+**macOS / Linux:**
 ```bash
-exodus teams-verify-import \
-  --config migration.toml
+export MICROSOFT_TENANT_ID="your-tenant-id"
+export MICROSOFT_CLIENT_ID="your-client-id"
+export MICROSOFT_CLIENT_SECRET="your-client-secret"
+exodus teams-execute-plan --config migration.toml --job-id live-run-1
 ```
 
-This audits that every message in the plan has a message-map entry and that no
-extra mappings exist. Writes a JSON verification report.
+**Windows (PowerShell):**
+```powershell
+$env:MICROSOFT_TENANT_ID     = "your-tenant-id"
+$env:MICROSOFT_CLIENT_ID     = "your-client-id"
+$env:MICROSOFT_CLIENT_SECRET = "your-client-secret"
+exodus teams-execute-plan --config migration.toml --job-id live-run-1
+```
+
+Expected output:
+```
+Adapter: GraphTeamsAdapter
+Execution: OK
+Messages: 1234/1234
+Skipped: 0
+```
+
+`Adapter: GraphTeamsAdapter` confirms messages are being posted to Teams for real.
+
+**What the migrated messages look like in Teams:**
+Each message appears from the registered Azure app (not the original user).
+The original author and send time are shown in the message body:
+
+> *Migrated from Webex | Originally sent: 2024-03-15T09:32:00Z*
+>
+> Hi team, the report is ready.
+
+**Azure app setup** (do this once, ask your IT admin if unsure):
+1. Go to [Azure portal](https://portal.azure.com) → **App registrations** → **New registration**
+2. Name it (e.g. "Exodus Migration"), leave defaults, click **Register**
+3. Copy the **Application (client) ID** → this is your `client_id`
+4. Copy the **Directory (tenant) ID** → this is your `tenant_id`
+5. Go to **Certificates & secrets** → **New client secret** → copy the value → this is your `client_secret`
+6. Go to **API permissions** → **Add a permission** → **Microsoft Graph** → **Application permissions**
+   - Add `Chat.ReadWrite.All` (for group chats and 1-on-1 chats)
+   - Add `ChannelMessage.Send` (for team channels)
+7. Click **Grant admin consent** (requires admin role)
+
+---
+
+## Step 8 — Verify
+
+Check that every planned message has a corresponding Teams message ID:
+
+```bash
+exodus teams-verify-import --config migration.toml
+```
 
 Expected output:
 ```
@@ -261,59 +318,51 @@ Verification: OK
 Report: .exodus/webex-to-teams/archive/reports/teams-import-verification.json
 Messages: 1234/1234
 Extra mappings: 0
-Unsupported attachments: 0
+Unsupported attachments: 3
 ```
 
-Non-zero `Unsupported attachments` is informational — those attachment types
-cannot be migrated via Graph external import.
+`Unsupported attachments` is informational — some file types cannot be migrated
+via the Teams API. The text content of those messages is still migrated.
 
 ---
 
 ## All-in-one command
 
-Once your `identity-map.json` and `conversation-map.json` are filled in you can
-run the full pipeline in one command:
+Once your maps are filled in, run the full pipeline (extract → plan → execute → verify)
+in one command:
 
+**macOS / Linux:**
 ```bash
-WEBEX_ACCESS_TOKEN=<your-token> exodus webex-teams-dry-run \
+exodus webex-teams-dry-run \
   --config migration.toml \
   --identity-map identity-map.json \
   --conversation-map conversation-map.json \
   --job-id pilot
 ```
 
-This runs extract → plan → execute → verify in sequence, stopping on any error.
+**Windows (PowerShell):**
+```powershell
+exodus webex-teams-dry-run `
+  --config migration.toml `
+  --identity-map identity-map.json `
+  --conversation-map conversation-map.json `
+  --job-id pilot
+```
+
+With Azure credentials set, this runs a full live migration. Without them, it runs dry-run.
 
 ---
 
 ## Troubleshooting
 
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `Secrets: FAILED — Environment variable is not set for source.auth: WEBEX_ACCESS_TOKEN` | Token not in environment | Export `WEBEX_ACCESS_TOKEN` before running |
-| `source.scope selected_rooms requires non-empty source.room_ids` | scope=selected_rooms but no room IDs | Add `room_ids` to config or switch to `user_rooms` |
-| `Archive contains no identities to map` | Archive empty — export hasn't run | Run `export-dry-run` first |
-| `Teams identity map row N missing entra_user_id` | Unfilled entry in identity map | Fill in all `entra_user_id` values |
-| `review_required` entries blocking import plan | Conversation map has unresolved rooms | Fill in `target_kind` and `target` for those rooms |
-| `Message N author X is not mapped to Entra ID` | Participant missing from identity map | Add the participant to `identity-map.json` |
-| `Teams import job already completed` | Re-running a completed job | Use a different `--job-id` or delete the job store |
-
----
-
-## What a live Teams import would require
-
-To move from dry-run to live Graph API execution:
-
-1. Register an app in Azure Entra ID with `Teamwork.Migrate.All` (or
-   `ChannelMessage.Send` for send-replay) application permission.
-2. Grant admin consent for the permission in your tenant.
-3. Implement `GraphTeamsAdapter` (satisfies the `TeamsMessageAdapter` Protocol in
-   `exodus_agent/targets/teams_executor.py`) using the Microsoft Graph
-   [Import third-party platform messages into Teams](https://learn.microsoft.com/en-us/microsoftteams/platform/graph-api/import-messages/import-external-messages-to-teams)
-   API — specifically the migration-mode channel flow.
-4. Pass the adapter to `execute_teams_import_plan(..., adapter=GraphTeamsAdapter(...))`.
-5. Teams-side: the target teams/channels must be placed in migration mode
-   (`POST /teams/{team-id}/completeMigration` only after all messages are imported).
-
-The dry-run end-to-end this quickstart exercises is the correct gate before
-building and authorizing the live adapter.
+| What you see | What it means | How to fix it |
+|---|---|---|
+| `Secrets: FAILED — Environment variable is not set for source.auth: WEBEX_ACCESS_TOKEN` | The `WEBEX_ACCESS_TOKEN` variable is not set in your terminal | Run `export WEBEX_ACCESS_TOKEN="..."` (Mac/Linux) or `$env:WEBEX_ACCESS_TOKEN = "..."` (Windows PowerShell) |
+| `source.scope selected_rooms requires non-empty source.room_ids` | You set `scope = "selected_rooms"` but forgot to list the rooms | Add the room IDs under `room_ids` in your config, or change scope back to `user_rooms` |
+| `Archive contains no identities to map` | The archive is empty — extraction has not run yet | Run Step 3 (export-dry-run) first |
+| `Teams identity map row N missing entra_user_id` | One or more people in `identity-map.json` have an empty `entra_user_id` | Open `identity-map.json` and fill in the Microsoft 365 email for each person |
+| `review_required` entries blocking import plan | Some rooms in `conversation-map.json` are not yet assigned a Teams target | Open `conversation-map.json` and fill in `target_kind` and `target` for those rooms |
+| `Teams import job already completed` | You are re-running a job that already finished | Use a different `--job-id` (e.g. `--job-id run-2`) |
+| `GraphApiError: Microsoft OAuth2 token request failed` | The Azure credentials are wrong or the app permission was not granted | Double-check tenant ID, client ID, client secret; make sure admin consent was granted in Azure |
+| `GraphApiError: Graph API request failed: status=403` | The Azure app is missing the required API permission | Go to Azure → App registrations → API permissions → add `Chat.ReadWrite.All` or `ChannelMessage.Send`, then grant admin consent |
+| `Partial Graph credentials in [target]: missing client_secret` | You set some but not all three Azure credentials | Either set all three (`tenant_id`, `client_id`, `client_secret`) or set none (dry-run) |
