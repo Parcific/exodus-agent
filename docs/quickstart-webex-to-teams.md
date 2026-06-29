@@ -48,6 +48,170 @@ Run `.venv\Scripts\activate` each time you open a new PowerShell window before u
 
 ---
 
+## Pilot run (recommended — do this before the full migration)
+
+Test the full end-to-end flow on a small, disposable slice of data before
+touching your real chats. This lets you confirm credentials work, messages
+look right in Teams, and the tool behaves as expected — with zero risk to
+your real data.
+
+### What you need for the pilot
+
+- **One Webex room** with a handful of messages (a 1-on-1 or a small project room)
+- **A narrow date window** — e.g. the last two weeks
+- **Two throwaway Teams targets** — one group chat and one 1-on-1 chat created
+  specifically for the test, both deleted afterward
+
+### Create the throwaway Teams targets
+
+**Throwaway group chat:**
+1. Open Teams → click the **New chat** icon (pencil at the top)
+2. Type your own name and at least one colleague → name the chat **"Migration test — delete me"**
+3. Open the chat, copy the ID from the browser URL:
+   `https://teams.microsoft.com/l/chat/19:abc123@thread.v2/...`
+   → `19:abc123@thread.v2` is your `chat_id`
+
+**Throwaway 1-on-1 chat:**
+1. Open Teams → click **New chat** → type just one colleague's name (someone
+   who does not mind a few test messages appearing)
+2. Send a quick message: *"Testing migration tool — I'll clean this up"*
+3. Copy the chat ID from the browser URL the same way as above
+
+> If you have a dedicated test/dev Microsoft 365 account in your org, use that
+> as the colleague — the test messages land there and no real person is affected.
+
+### Create a scoped pilot config
+
+Save this as `migration-pilot.toml` — edit the room ID and date window:
+
+```toml
+name = "pilot"
+mode = "individual"
+workspace = ".exodus/pilot"
+runtime = "local"
+
+[source]
+kind = "webex"
+auth = "env:WEBEX_ACCESS_TOKEN"
+scope = "selected_rooms"
+room_ids = ["Y2lzY29zcGFy..."]        # paste the Webex room ID here
+message_since = "2025-06-01T00:00:00Z" # limit to a small window
+message_before = "2025-07-01T00:00:00Z"
+
+[target]
+kind = "teams"
+auth = "graph"
+tenant_id = "env:MICROSOFT_TENANT_ID"
+client_id = "env:MICROSOFT_CLIENT_ID"
+client_secret = "env:MICROSOFT_CLIENT_SECRET"
+```
+
+> **How to find a Webex room ID:** run the full extract once (`exodus export-dry-run`)
+> and open `.exodus/.../archive/conversations.jsonl` — the `source_id` field on
+> each line is the room ID.
+
+### Create minimal identity and conversation maps
+
+`identity-map-pilot.json` — only the people in that room (fill in their Teams email):
+```json
+[
+  {
+    "source_user_id": "Y2lzY29zcGFy...",
+    "display_name": "Alice Chen",
+    "email": "alice@company.webex.com",
+    "entra_user_id": "alice@yourcompany.com"
+  }
+]
+```
+
+`conversation-map-pilot.json` — map the Webex room to both throwaway chats
+(use the `source_conversation_id` from the extracted archive):
+
+```json
+[
+  {
+    "source_conversation_id": "Y2lzY29zcGFy...",
+    "title": "My test room (group)",
+    "target_kind": "group_chat",
+    "target": {
+      "chat_id": "19:abc123@thread.v2"
+    }
+  },
+  {
+    "source_conversation_id": "Y2lzY29zcGFy...",
+    "title": "My test room (1-on-1)",
+    "target_kind": "one_on_one_chat",
+    "target": {
+      "chat_id": "19:xyz789@thread.v2"
+    }
+  }
+]
+```
+
+> You can point the same Webex room at both target types to test both in one run.
+
+### Run the pilot
+
+**macOS / Linux:**
+```bash
+export WEBEX_ACCESS_TOKEN="..."
+export MICROSOFT_TENANT_ID="..."
+export MICROSOFT_CLIENT_ID="..."
+export MICROSOFT_CLIENT_SECRET="..."
+
+exodus webex-teams-dry-run \
+  --config migration-pilot.toml \
+  --identity-map identity-map-pilot.json \
+  --conversation-map conversation-map-pilot.json \
+  --job-id pilot-1
+```
+
+**Windows (PowerShell):**
+```powershell
+$env:WEBEX_ACCESS_TOKEN      = "..."
+$env:MICROSOFT_TENANT_ID     = "..."
+$env:MICROSOFT_CLIENT_ID     = "..."
+$env:MICROSOFT_CLIENT_SECRET = "..."
+
+exodus webex-teams-dry-run `
+  --config migration-pilot.toml `
+  --identity-map identity-map-pilot.json `
+  --conversation-map conversation-map-pilot.json `
+  --job-id pilot-1
+```
+
+Expected output:
+```
+Adapter: GraphTeamsAdapter
+Workflow: OK
+Messages: 12/12
+Verification: OK
+```
+
+### Verify in Teams
+
+Open both throwaway chats in Teams. You should see the Webex messages posted,
+each showing the original author and send time:
+
+> *Migrated from Webex | Originally sent: 2025-06-15T09:32:00Z*
+>
+> The original message text here.
+
+Check that:
+- All expected messages appear in both chats
+- Names and timestamps in the provenance header look correct
+- The message count matches what `Verification: OK` reported
+
+### Clean up
+
+Delete both throwaway Teams chats (right-click the chat → **Delete**).
+Your real chats are untouched. Delete `.exodus/pilot/` if you want a clean slate.
+
+Once the pilot looks good, proceed with the full migration below using your
+real `migration.toml`, `identity-map.json`, and `conversation-map.json`.
+
+---
+
 ## Step 1 — Create your config file
 
 Copy the example and save it as `migration.toml` in your working folder:
